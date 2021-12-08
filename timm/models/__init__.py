@@ -35,6 +35,7 @@ from .resnetv2 import *
 from .rexnet import *
 from .selecsls import *
 from .senet import *
+from .senetnd import *
 from .sknet import *
 from .swin_transformer import *
 from .tnt import *

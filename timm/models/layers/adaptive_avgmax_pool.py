@@ -76,6 +76,39 @@ class AdaptiveCatAvgMaxPool2d(nn.Module):
         return adaptive_catavgmax_pool2d(x, self.output_size)
 
 
+class SelectAdaptivePool1d(nn.Module):
+    """Selectable global pooling layer with dynamic input kernel size
+    """
+    def __init__(self, output_size=1, pool_type='fast', flatten=False):
+        super(SelectAdaptivePool1d, self).__init__()
+        self.pool_type = pool_type or ''  # convert other falsy values to empty string for consistent TS typing
+        self.flatten = nn.Flatten(1) if flatten else nn.Identity()
+        if pool_type == '':
+            self.pool = nn.Identity()  # pass through
+        elif pool_type == 'avg':
+            self.pool = nn.AdaptiveAvgPool1d(output_size)
+        elif pool_type == 'max':
+            self.pool = nn.AdaptiveMaxPool1d(output_size)
+        else:
+            assert False, 'Invalid pool type: %s' % pool_type
+
+    def is_identity(self):
+        return not self.pool_type
+
+    def forward(self, x):
+        x = self.pool(x)
+        x = self.flatten(x)
+        return x
+
+    def feat_mult(self):
+        return adaptive_pool_feat_mult(self.pool_type)
+
+    def __repr__(self):
+        return self.__class__.__name__ + ' (' \
+               + 'pool_type=' + self.pool_type \
+               + ', flatten=' + str(self.flatten) + ')'
+
+
 class SelectAdaptivePool2d(nn.Module):
     """Selectable global pooling layer with dynamic input kernel size
     """
@@ -116,3 +149,35 @@ class SelectAdaptivePool2d(nn.Module):
                + 'pool_type=' + self.pool_type \
                + ', flatten=' + str(self.flatten) + ')'
 
+
+class SelectAdaptivePool3d(nn.Module):
+    """Selectable global pooling layer with dynamic input kernel size
+    """
+    def __init__(self, output_size=1, pool_type='fast', flatten=False):
+        super(SelectAdaptivePool3d, self).__init__()
+        self.pool_type = pool_type or ''  # convert other falsy values to empty string for consistent TS typing
+        self.flatten = nn.Flatten(1) if flatten else nn.Identity()
+        if pool_type == '':
+            self.pool = nn.Identity()  # pass through
+        elif pool_type == 'avg':
+            self.pool = nn.AdaptiveAvgPool3d(output_size)
+        elif pool_type == 'max':
+            self.pool = nn.AdaptiveMaxPool3d(output_size)
+        else:
+            assert False, 'Invalid pool type: %s' % pool_type
+
+    def is_identity(self):
+        return not self.pool_type
+
+    def forward(self, x):
+        x = self.pool(x)
+        x = self.flatten(x)
+        return x
+
+    def feat_mult(self):
+        return adaptive_pool_feat_mult(self.pool_type)
+
+    def __repr__(self):
+        return self.__class__.__name__ + ' (' \
+               + 'pool_type=' + self.pool_type \
+               + ', flatten=' + str(self.flatten) + ')'

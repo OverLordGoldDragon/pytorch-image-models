@@ -123,13 +123,13 @@ default_cfgs = {
         url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/efficientnet_em_ra2-66250f76.pth',
         input_size=(3, 240, 240), pool_size=(8, 8), crop_pct=0.882),
     'efficientnet_el': _cfg(
-        url='https://github.com/DeGirum/pruned-models/releases/download/efficientnet_v1.0/efficientnet_el.pth', 
+        url='https://github.com/DeGirum/pruned-models/releases/download/efficientnet_v1.0/efficientnet_el.pth',
         input_size=(3, 300, 300), pool_size=(10, 10), crop_pct=0.904),
 
     'efficientnet_es_pruned': _cfg(
         url='https://github.com/DeGirum/pruned-models/releases/download/efficientnet_v1.0/efficientnet_es_pruned75.pth'),
     'efficientnet_el_pruned': _cfg(
-        url='https://github.com/DeGirum/pruned-models/releases/download/efficientnet_v1.0/efficientnet_el_pruned70.pth', 
+        url='https://github.com/DeGirum/pruned-models/releases/download/efficientnet_v1.0/efficientnet_el_pruned70.pth',
         input_size=(3, 300, 300), pool_size=(10, 10), crop_pct=0.904),
 
     'efficientnet_cc_b0_4e': _cfg(url=''),
@@ -439,7 +439,7 @@ class EfficientNet(nn.Module):
         # Stem
         if not fix_stem:
             stem_size = round_chs_fn(stem_size)
-        self.conv_stem = create_conv2d(in_chans, stem_size, 3, stride=2, padding=pad_type)
+        self.conv_stem = create_conv2d(in_chans, stem_size, 3, stride=1, padding=pad_type)
         self.bn1 = norm_layer(stem_size)
         self.act1 = act_layer(inplace=True)
 

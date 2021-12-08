@@ -27,7 +27,7 @@ from .norm import GroupNorm, LayerNorm2d
 from .norm_act import BatchNormAct2d, GroupNormAct
 from .padding import get_padding, get_same_padding, pad_same
 from .patch_embed import PatchEmbed
-from .pool2d_same import AvgPool2dSame, create_pool2d
+from .pool2d_same import AvgPool2dSame, AvgPool3dSame, create_pool2d, create_pool3d
 from .squeeze_excite import SEModule, SqueezeExcite, EffectiveSEModule, EffectiveSqueezeExcite
 from .selective_kernel import SelectiveKernel
 from .separable_conv import SeparableConv2d, SeparableConvBnAct

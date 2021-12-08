@@ -33,6 +33,19 @@ def pad_same(x, k: List[int], s: List[int], d: List[int] = (1, 1), value: float 
     return x
 
 
+def pad_same_3d(x, k: List[int], s: List[int], d: List[int] = (1, 1, 1),
+                value: float = 0):
+    ih, iw, iz = x.size()[-3:]
+    pad_h = get_same_padding(ih, k[0], s[0], d[0])
+    pad_w = get_same_padding(iw, k[1], s[1], d[1])
+    pad_z = get_same_padding(iz, k[1], s[1], d[1])
+    if pad_h > 0 or pad_w > 0 or pad_z > 0:
+        x = F.pad(x, [pad_w // 2, pad_w - pad_w // 2,
+                      pad_h // 2, pad_h - pad_h // 2,
+                      pad_z // 2, pad_z - pad_z // 2], value=value)
+    return x
+
+
 def get_padding_value(padding, kernel_size, **kwargs) -> Tuple[Tuple, bool]:
     dynamic = False
     if isinstance(padding, str):
