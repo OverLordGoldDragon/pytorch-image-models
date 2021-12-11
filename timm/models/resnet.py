@@ -329,7 +329,7 @@ class BasicBlock(nn.Module):
         self.conv1 = self._conv(
             inplanes, first_planes, kernel_size=kernel_size,
             stride=1 if use_aa else stride,
-            padding=first_dilation, dilation=first_dilation, groups=groups,
+            padding='same', dilation=first_dilation, groups=groups,
             bias=False)
         self.bn1 = norm_layer(first_planes)
         self.act1 = act_layer(inplace=True)
@@ -337,7 +337,7 @@ class BasicBlock(nn.Module):
                            ) if use_aa else None
 
         self.conv2 = self._conv(
-            first_planes, outplanes, kernel_size=kernel_size, padding=dilation,
+            first_planes, outplanes, kernel_size=kernel_size, padding='same',
             dilation=dilation, groups=groups, bias=False)
         self.bn2 = norm_layer(outplanes)
 
