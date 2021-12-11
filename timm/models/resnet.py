@@ -761,8 +761,8 @@ class ResNet(nn.Module):
         self.save(x, 1)
         x = self.act1(x)
         self.save(x, 2)
-        x = self.maxpool(x)
-        self.save(x, 3)
+        # x = self.maxpool(x)
+        # self.save(x, 3)
 
         x = self.layer1(x)
         self.save(x, 4)
