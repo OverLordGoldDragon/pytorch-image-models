@@ -649,7 +649,7 @@ class ResNet(nn.Module):
                  block_reduce_first=1, down_kernel_size=1, avg_down=False,
                  act_layer=nn.ReLU, norm_layer=None, aa_layer=None,
                  in_drop_rate=0., out_drop_rate=0., drop_path_rate=0.,
-                 drop_block_rate=0., global_pool='avg',
+                 drop_block_rate=0., in_spatial_dropout=True, global_pool='avg',
                  zero_init_last_bn=True, block_args=None,
                  channels=(64, 128, 256, 512), stem_stride=2, stem_pool=2,
                  layer_groups=(1, 1, 1, 1), layer_kernel_sizes=(3, 3, 3, 3),
@@ -660,6 +660,7 @@ class ResNet(nn.Module):
         self.num_classes = num_classes
         self.in_drop_rate = in_drop_rate
         self.out_drop_rate = out_drop_rate
+        self.in_spatial_dropout = in_spatial_dropout
         super(ResNet, self).__init__()
         _set_layer_builders(self, dims)
         norm_layer = norm_layer or self._norm
@@ -777,13 +778,24 @@ class ResNet(nn.Module):
 
     def forward(self, x):
         if self.in_drop_rate:
-            x = F.dropout(x, p=float(self.in_drop_rate), training=self.training)
+            if self.in_spatial_dropout:
+                if x.ndim in (3, 4):  # 1d, 2d  # TODO torch may fix bug in 1.11+
+                    l = F.dropout2d
+                elif x.ndim == 5:
+                    l = F.dropout3d
+            else:
+                l = F.dropout
+            x = l(x, p=float(self.in_drop_rate), training=self.training)
+            self.save(x, -1)
+
         x = self.forward_features(x)
         x = self.global_pool(x)
         self.save(x, 9)
+
         if self.out_drop_rate:
             x = F.dropout(x, p=float(self.out_drop_rate), training=self.training)
         self.save(x, 10)
+
         if self.fc is not None:
             x = self.fc(x)
             self.save(x, 11)
