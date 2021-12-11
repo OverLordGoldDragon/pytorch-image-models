@@ -311,9 +311,10 @@ class BasicBlock(nn.Module):
     expansion = 1
 
     def __init__(self, inplanes, planes, stride=1, downsample=None, cardinality=1, base_width=64,
-                 reduce_first=1, dilation=1, first_dilation=None, act_layer=nn.ReLU, norm_layer=nn.BatchNorm2d,
+                 reduce_first=1, dilation=1, first_dilation=None,
+                 act_layer=nn.ReLU, norm_layer=nn.BatchNorm2d,
                  attn_layer=None, aa_layer=None, drop_block=None, drop_path=None,
-                 dims=2):
+                 groups=1, kernel_size=3, dims=2):
         super(BasicBlock, self).__init__()
         _set_layer_builders(self, dims)
 
@@ -322,17 +323,22 @@ class BasicBlock(nn.Module):
         first_planes = planes // reduce_first
         outplanes = planes * self.expansion
         first_dilation = first_dilation or dilation
-        use_aa = aa_layer is not None and (stride == 2 or first_dilation != dilation)
+        use_aa = aa_layer is not None and (stride == 2 or
+                                           first_dilation != dilation)
 
         self.conv1 = self._conv(
-            inplanes, first_planes, kernel_size=3, stride=1 if use_aa else stride, padding=first_dilation,
-            dilation=first_dilation, bias=False)
+            inplanes, first_planes, kernel_size=kernel_size,
+            stride=1 if use_aa else stride,
+            padding=first_dilation, dilation=first_dilation, groups=groups,
+            bias=False)
         self.bn1 = norm_layer(first_planes)
         self.act1 = act_layer(inplace=True)
-        self.aa = aa_layer(channels=first_planes, stride=stride) if use_aa else None
+        self.aa = aa_layer(channels=first_planes, stride=stride
+                           ) if use_aa else None
 
         self.conv2 = self._conv(
-            first_planes, outplanes, kernel_size=3, padding=dilation, dilation=dilation, bias=False)
+            first_planes, outplanes, kernel_size=kernel_size, padding=dilation,
+            dilation=dilation, groups=groups, bias=False)
         self.bn2 = norm_layer(outplanes)
 
         self.se = create_attn(attn_layer, outplanes, dims=dims)
@@ -515,8 +521,9 @@ def drop_blocks(drop_block_rate=0.):
 
 
 def make_blocks(
-        block_fn, channels, block_repeats, inplanes, reduce_first=1, output_stride=32,
-        down_kernel_size=1, avg_down=False, drop_block_rate=0., drop_path_rate=0.,
+        block_fn, channels, block_repeats, inplanes, reduce_first=1,
+        output_stride=32, down_kernel_size=1, avg_down=False, drop_block_rate=0.,
+        drop_path_rate=0., layer_groups=(1, 1, 1), layer_kernel_sizes=(3, 3, 3),
         dims=2, **kwargs):
     stages = []
     feature_info = []
@@ -541,16 +548,21 @@ def make_blocks(
                 dims=dims)
             downsample = downsample_avg(**down_kwargs) if avg_down else downsample_conv(**down_kwargs)
 
-        block_kwargs = dict(reduce_first=reduce_first, dilation=dilation, drop_block=db,
+        block_kwargs = dict(reduce_first=reduce_first, dilation=dilation,
+                            drop_block=db, groups=layer_groups[stage_idx],
+                            kernel_size=layer_kernel_sizes[stage_idx],
                             dims=dims, **kwargs)
         blocks = []
         for block_idx in range(num_blocks):
             downsample = downsample if block_idx == 0 else None
             stride = stride if block_idx == 0 else 1
-            block_dpr = drop_path_rate * net_block_idx / (net_num_blocks - 1)  # stochastic depth linear decay rule
+            # stochastic depth linear decay rule
+            block_dpr = drop_path_rate * net_block_idx / (net_num_blocks - 1)
+
             blocks.append(block_fn(
                 inplanes, planes, stride, downsample, first_dilation=prev_dilation,
-                drop_path=DropPath(block_dpr) if block_dpr > 0. else None, **block_kwargs))
+                drop_path=DropPath(block_dpr) if block_dpr > 0. else None,
+                **block_kwargs))
             prev_dilation = dilation
             inplanes = planes * block_fn.expansion
             net_block_idx += 1
@@ -635,16 +647,19 @@ class ResNet(nn.Module):
                  cardinality=1, base_width=64, stem_width=64, stem_type='',
                  stem_groups=1, replace_stem_pool=False, output_stride=32,
                  block_reduce_first=1, down_kernel_size=1, avg_down=False,
-                 act_layer=nn.ReLU, norm_layer=None, aa_layer=None, drop_rate=0.,
-                 drop_path_rate=0., drop_block_rate=0., global_pool='avg',
+                 act_layer=nn.ReLU, norm_layer=None, aa_layer=None,
+                 in_drop_rate=0., out_drop_rate=0., drop_path_rate=0.,
+                 drop_block_rate=0., global_pool='avg',
                  zero_init_last_bn=True, block_args=None,
                  channels=(64, 128, 256, 512), stem_stride=2, stem_pool=2,
-                 dims=2):
+                 layer_groups=(1, 1, 1, 1), layer_kernel_sizes=(3, 3, 3, 3),
+                 include_classifier=True, dims=2):
         block_args = block_args or dict()
         assert output_stride in (4, 8, 16, 32)
         self.layers = layers
         self.num_classes = num_classes
-        self.drop_rate = drop_rate
+        self.in_drop_rate = in_drop_rate
+        self.out_drop_rate = out_drop_rate
         super(ResNet, self).__init__()
         _set_layer_builders(self, dims)
         norm_layer = norm_layer or self._norm
@@ -696,6 +711,7 @@ class ResNet(nn.Module):
             output_stride=output_stride, reduce_first=block_reduce_first, avg_down=avg_down,
             down_kernel_size=down_kernel_size, act_layer=act_layer, norm_layer=norm_layer, aa_layer=aa_layer,
             drop_block_rate=drop_block_rate, drop_path_rate=drop_path_rate,
+            layer_groups=layer_groups, layer_kernel_sizes=layer_kernel_sizes,
             dims=dims, **block_args)
         for stage in stage_modules:
             self.add_module(*stage)  # layer1, layer2, etc
@@ -703,9 +719,9 @@ class ResNet(nn.Module):
 
         # Head (Pooling and Classifier)
         self.num_features = channels[-1] * block.expansion
-        self.global_pool, self.fc = create_classifier(self.num_features, self.num_classes,
-                                                      pool_type=global_pool,
-                                                      dims=dims)
+        self.global_pool, self.fc = create_classifier(
+            self.num_features, self.num_classes, pool_type=global_pool,
+            include_classifier=include_classifier, dims=dims)
 
         self.init_weights(zero_init_last_bn=zero_init_last_bn)
 
@@ -760,14 +776,17 @@ class ResNet(nn.Module):
         return x
 
     def forward(self, x):
+        if self.in_drop_rate:
+            x = F.dropout(x, p=float(self.in_drop_rate), training=self.training)
         x = self.forward_features(x)
         x = self.global_pool(x)
         self.save(x, 9)
-        if self.drop_rate:
-            x = F.dropout(x, p=float(self.drop_rate), training=self.training)
+        if self.out_drop_rate:
+            x = F.dropout(x, p=float(self.out_drop_rate), training=self.training)
         self.save(x, 10)
-        x = self.fc(x)
-        self.save(x, 11)
+        if self.fc is not None:
+            x = self.fc(x)
+            self.save(x, 11)
         return x
 
 

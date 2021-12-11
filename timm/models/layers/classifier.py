@@ -32,15 +32,22 @@ def _create_fc(num_features, num_classes, use_conv=False, dims=2):
         fc = fn(num_features, num_classes, 1, bias=True)
     else:
         # NOTE: using my Linear wrapper that fixes AMP + torchscript casting issue
-        fc = Linear(num_features, num_classes, bias=True)
+        if num_classes == 2:
+            fc = Linear(num_features, 1, bias=True)
+        else:
+            fc = Linear(num_features, num_classes, bias=True)
     return fc
 
 
 def create_classifier(num_features, num_classes, pool_type='avg', use_conv=False,
-                      dims=2):
-    global_pool, num_pooled_features = _create_pool(num_features, num_classes, pool_type,
-                                                    use_conv=use_conv, dims=dims)
-    fc = _create_fc(num_pooled_features, num_classes, use_conv=use_conv, dims=dims)
+                      include_classifier=True, dims=2):
+    global_pool, num_pooled_features = _create_pool(
+        num_features, num_classes, pool_type, use_conv=use_conv, dims=dims)
+    if include_classifier:
+        fc = _create_fc(num_pooled_features, num_classes, use_conv=use_conv,
+                        dims=dims)
+    else:
+        fc = None
     return global_pool, fc
 
 
