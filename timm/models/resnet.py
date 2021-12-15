@@ -127,15 +127,15 @@ class ConvPadNd(nn.Module):
             out_shape = in_shape[:2]
             for i, L in enumerate(shape_spatial):
                 pad_total = pad[2*i] + pad[2*i + 1]
-                out_shape += ConvPadNd.compute_out_amount(
-                    L, ks[i], s[i], d[i], pad_total)
+                out_shape += (ConvPadNd.compute_out_amount(
+                    L, ks[i], s[i], d[i], pad_total),)
         out_shape = list(out_shape)
         out_shape[1] = ch_out
         return tuple(out_shape)
 
     @staticmethod
     def compute_out_amount(L, ks, s, d, pad_total):
-        return int(math.floor((L + 2*pad_total - d * (ks - 1) - 1) / s + 1))
+        return int(math.floor((L + pad_total - d * (ks - 1) - 1) / s + 1))
 
     @staticmethod
     def _process_args(in_shape, ks, s, d):
@@ -660,7 +660,7 @@ class ResNet(nn.Module):
 
     def forward_features(self, x):
         x = self.conv1(x)
-        self.ashape(x, self.conv1)
+        # self.ashape(x, self.conv1)
         self.save(x, 0)
         x = self.bn1(x)
         self.save(x, 1)
@@ -670,14 +670,14 @@ class ResNet(nn.Module):
         # self.save(x, 3)
 
         x = self.layer1(x)
-        self.ashape(x, self.layer1)
+        # self.ashape(x, self.layer1)
         self.save(x, 4)
         x = self.layer2(x)
-        self.ashape(x, self.layer2)
+        # self.ashape(x, self.layer2)
         self.save(x, 5)
         if len(self.layers) >= 3:
             x = self.layer3(x)
-            self.ashape(x, self.layer3)
+            # self.ashape(x, self.layer3)
             self.save(x, 6)
         if len(self.layers) >= 4:
             x = self.layer4(x)
