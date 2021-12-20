@@ -382,7 +382,7 @@ def make_blocks(
         block_fn, channels, block_repeats, inplanes, in_shape, reduce_first=1,
         output_stride=32, down_kernel_size=1, avg_down=False, drop_block_rate=0.,
         drop_path_rate=0., layer_groups=(1, 1, 1), layer_kernel_sizes=(3, 3, 3),
-        dims=2, **kwargs):
+        stride=(1, 1, 1), dims=2, **kwargs):
     stages = []
     feature_info = []
     net_num_blocks = sum(block_repeats)
@@ -393,19 +393,14 @@ def make_blocks(
             channels, block_repeats, drop_blocks(drop_block_rate))):
         # never liked this name, but weight compat requires it
         stage_name = f'layer{stage_idx + 1}'
-        stride = 1 if stage_idx == 0 else 2
-        if net_stride >= output_stride:
-            dilation *= stride
-            stride = 1
-        else:
-            net_stride *= stride
-
+        s = stride[stage_idx]
         downsample = None
-        if stride != 1 or inplanes != planes * block_fn.expansion:
+
+        if s != 1 or inplanes != planes * block_fn.expansion:
             down_kwargs = dict(
                 in_shape=in_shape, in_channels=inplanes,
                 out_channels=planes * block_fn.expansion,
-                kernel_size=down_kernel_size, stride=stride, dilation=dilation,
+                kernel_size=down_kernel_size, stride=s, dilation=dilation,
                 first_dilation=prev_dilation, norm_layer=kwargs.get('norm_layer'),
                 dims=dims)
             downsample = (downsample_avg(**down_kwargs) if avg_down else
@@ -418,12 +413,12 @@ def make_blocks(
         blocks = []
         for block_idx in range(num_blocks):
             downsample = downsample if block_idx == 0 else None
-            stride = stride if block_idx == 0 else 1
+            s = s if block_idx == 0 else 1
             # stochastic depth linear decay rule
             block_dpr = drop_path_rate * net_block_idx / (net_num_blocks - 1)
 
             blocks.append(block_fn(
-                in_shape, inplanes, planes, stride, downsample,
+                in_shape, inplanes, planes, s, downsample,
                 first_dilation=prev_dilation,
                 drop_path=DropPath(block_dpr) if block_dpr > 0. else None,
                 **block_kwargs))
@@ -536,7 +531,7 @@ class ResNet(nn.Module):
                  zero_init_last_bn=True, block_args=None,
                  channels=(64, 128, 256, 512), stem_stride=2, stem_pool=2,
                  layer_groups=(1, 1, 1, 1), layer_kernel_sizes=(3, 3, 3, 3),
-                 include_classifier=True, dims=2):
+                 stride=(1, 1, 1, 1), include_classifier=True, dims=2):
         block_args = block_args or dict()
         assert output_stride in (4, 8, 16, 32)
         self.layers = layers
@@ -609,7 +604,7 @@ class ResNet(nn.Module):
             act_layer=act_layer, norm_layer=norm_layer, aa_layer=aa_layer,
             drop_block_rate=drop_block_rate, drop_path_rate=drop_path_rate,
             layer_groups=layer_groups, layer_kernel_sizes=layer_kernel_sizes,
-            dims=dims, **block_args)
+            stride=stride, dims=dims, **block_args)
         for stage in stage_modules:
             self.add_module(*stage)  # layer1, layer2, etc
         self.feature_info.extend(stage_feature_info)
