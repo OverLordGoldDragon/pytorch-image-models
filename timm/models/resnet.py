@@ -106,6 +106,7 @@ class ConvPadNd(nn.Module):
         for i, L in enumerate(shape_spatial):
             pad = ConvPadNd.compute_pad_amount(L, ks[i], s[i], d[i])
             pad_shape += [pad//2, pad - pad//2]
+        pad_shape = pad_shape[::-1]  # `F.pad` specifies backwards
         return pad_shape
 
     @staticmethod
@@ -119,6 +120,7 @@ class ConvPadNd(nn.Module):
 
     @staticmethod
     def compute_out_shape(in_shape, ks, s, d, pad, ch_out):
+        pad = pad[::-1]  # since it was inverted
         if s == 1:
             out_shape = in_shape
         else:
@@ -380,7 +382,7 @@ def drop_blocks(drop_block_rate=0.):
 
 def make_blocks(
         block_fn, channels, block_repeats, inplanes, in_shape, reduce_first=1,
-        output_stride=32, down_kernel_size=1, avg_down=False, drop_block_rate=0.,
+        down_kernel_size=1, avg_down=False, drop_block_rate=0.,
         drop_path_rate=0., layer_groups=(1, 1, 1), layer_kernel_sizes=(3, 3, 3),
         stride=(1, 1, 1), dims=2, **kwargs):
     stages = []
@@ -509,9 +511,6 @@ class ResNet(nn.Module):
     avg_down : bool, default False
         Whether to use average pooling for projection skip connection between
         stages/downsample.
-    output_stride : int, default 32
-        Set the output stride of the network, 32, 16, or 8. Typically used in
-        segmentation.
     act_layer : nn.Module, activation layer
     norm_layer : nn.Module, normalization layer
     aa_layer : nn.Module, anti-aliasing layer
@@ -523,7 +522,7 @@ class ResNet(nn.Module):
 
     def __init__(self, block, layers, in_shape, num_classes=1000, in_chans=3,
                  cardinality=1, base_width=64, stem_width=64, stem_type='',
-                 stem_groups=1, replace_stem_pool=False, output_stride=32,
+                 stem_groups=1, replace_stem_pool=False,
                  block_reduce_first=1, down_kernel_size=1, avg_down=False,
                  act_layer=nn.ReLU, norm_layer=None, aa_layer=None,
                  in_drop_rate=0., out_drop_rate=0., drop_path_rate=0.,
@@ -533,7 +532,6 @@ class ResNet(nn.Module):
                  layer_groups=(1, 1, 1, 1), layer_kernel_sizes=(3, 3, 3, 3),
                  stride=(1, 1, 1, 1), include_classifier=True, dims=2):
         block_args = block_args or dict()
-        assert output_stride in (4, 8, 16, 32)
         self.layers = layers
         self.in_shape = in_shape
         self.num_classes = num_classes
@@ -599,7 +597,7 @@ class ResNet(nn.Module):
         stage_modules, stage_feature_info = make_blocks(
             block, channels, layers, inplanes, in_shape=self.conv1.out_shape,
             cardinality=cardinality, base_width=base_width,
-            output_stride=output_stride, reduce_first=block_reduce_first,
+            reduce_first=block_reduce_first,
             avg_down=avg_down, down_kernel_size=down_kernel_size,
             act_layer=act_layer, norm_layer=norm_layer, aa_layer=aa_layer,
             drop_block_rate=drop_block_rate, drop_path_rate=drop_path_rate,
