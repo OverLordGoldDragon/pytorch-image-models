@@ -529,6 +529,7 @@ class ResNet(nn.Module):
                  drop_block_rate=0., in_spatial_dropout=True, global_pool='avg',
                  zero_init_last_bn=True, block_args=None,
                  channels=(64, 128, 256, 512), stem_stride=2, stem_pool=2,
+                 stem_pool_kernel_size=3,
                  layer_groups=(1, 1, 1, 1), layer_kernel_sizes=(3, 3, 3, 3),
                  stride=(1, 1, 1, 1), include_classifier=True, dims=2):
         block_args = block_args or dict()
@@ -538,6 +539,7 @@ class ResNet(nn.Module):
         self.in_drop_rate = in_drop_rate
         self.out_drop_rate = out_drop_rate
         self.in_spatial_dropout = in_spatial_dropout
+        self.stem_pool = stem_pool
         super(ResNet, self).__init__()
         _set_layer_builders(self, dims)
         self._conv = ConvPadNd
@@ -585,13 +587,16 @@ class ResNet(nn.Module):
                 act_layer(inplace=True)
             ]))
         else:
+            mp_pad = ConvPadNd.compute_pad_shape(
+                self.conv1.out_shape, ks=stem_pool_kernel_size, s=stem_pool, d=1)
             if aa_layer is not None:
                 self.maxpool = nn.Sequential(*[
-                    self._max_pool(kernel_size=3, stride=1, padding=1),
+                    self._max_pool(kernel_size=stem_pool_kernel_size,
+                                   stride=stem_pool, padding=mp_pad),
                     aa_layer(channels=inplanes, stride=stem_pool)])
             else:
-                self.maxpool = self._max_pool(kernel_size=3, stride=stem_pool,
-                                              padding=1)
+                self.maxpool = self._max_pool(kernel_size=stem_pool_kernel_size,
+                                              stride=stem_pool, padding=mp_pad)
 
         # Feature Blocks
         stage_modules, stage_feature_info = make_blocks(
@@ -653,24 +658,25 @@ class ResNet(nn.Module):
 
     def forward_features(self, x):
         x = self.conv1(x)
-        # self.ashape(x, self.conv1)
+        self.ashape(x, self.conv1)
         self.save(x, 0)
         x = self.bn1(x)
         self.save(x, 1)
         x = self.act1(x)
         self.save(x, 2)
-        # x = self.maxpool(x)
+        if self.stem_pool != 1:
+            x = self.maxpool(x)
         # self.save(x, 3)
 
         x = self.layer1(x)
-        # self.ashape(x, self.layer1)
+        self.ashape(x, self.layer1)
         self.save(x, 4)
         x = self.layer2(x)
-        # self.ashape(x, self.layer2)
+        self.ashape(x, self.layer2)
         self.save(x, 5)
         if len(self.layers) >= 3:
             x = self.layer3(x)
-            # self.ashape(x, self.layer3)
+            self.ashape(x, self.layer3)
             self.save(x, 6)
         if len(self.layers) >= 4:
             x = self.layer4(x)
