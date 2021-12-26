@@ -119,7 +119,7 @@ class ConvPadNd(nn.Module):
         return int(max(pad, 0))
 
     @staticmethod
-    def compute_out_shape(in_shape, ks, s, d, pad, ch_out):
+    def compute_out_shape(in_shape, ks, s, d, pad, ch_out=None):
         pad = pad[::-1]  # since it was inverted
         if s == 1:
             out_shape = in_shape
@@ -132,6 +132,8 @@ class ConvPadNd(nn.Module):
                 out_shape += (ConvPadNd.compute_out_amount(
                     L, ks[i], s[i], d[i], pad_total),)
         out_shape = list(out_shape)
+        if ch_out is None:
+            ch_out = in_shape[1]  # ch_in
         out_shape[1] = ch_out
         return tuple(out_shape)
 
@@ -577,18 +579,23 @@ class ResNet(nn.Module):
         # Stem Pooling
         if replace_stem_pool:
             raise NotImplementedError
-            self.maxpool = nn.Sequential(*filter(None, [
-                self._conv(inplanes, inplanes, 3,
-                           stride=1 if aa_layer else stem_pool, #padding=1,
-                           bias=False),
-                aa_layer(channels=inplanes, stride=stem_pool) if aa_layer else
-                None,
-                norm_layer(inplanes),
-                act_layer(inplace=True)
-            ]))
         else:
-            mp_pad = ConvPadNd.compute_pad_shape(
+            mp_pad_orig = tuple(ConvPadNd.compute_pad_shape(
                 self.conv1.out_shape, ks=stem_pool_kernel_size, s=stem_pool, d=1)
+                )
+            mp_pad = mp_pad_orig[::-1]
+            assert mp_pad[0] == mp_pad[1], mp_pad
+            if len(mp_pad) > 2:
+                assert mp_pad[2] == mp_pad[3], mp_pad
+            if len(mp_pad) > 4:
+                assert mp_pad[4] == mp_pad[5], mp_pad
+            if len(mp_pad) == 2:
+                mp_pad = mp_pad[0]
+            elif len(mp_pad) == 4:
+                mp_pad = (mp_pad[0], mp_pad[2])
+            else:
+                mp_pad = (mp_pad[0], mp_pad[2], mp_pad[4])
+            
             if aa_layer is not None:
                 self.maxpool = nn.Sequential(*[
                     self._max_pool(kernel_size=stem_pool_kernel_size,
@@ -597,10 +604,17 @@ class ResNet(nn.Module):
             else:
                 self.maxpool = self._max_pool(kernel_size=stem_pool_kernel_size,
                                               stride=stem_pool, padding=mp_pad)
+                
+        if stem_pool == 1:
+            layer1_in_shape = self.conv1.out_shape
+        else:
+            layer1_in_shape = tuple(ConvPadNd.compute_out_shape(
+                self.conv1.out_shape, ks=stem_pool_kernel_size, 
+                s=stem_pool, d=1, pad=mp_pad_orig))
 
         # Feature Blocks
         stage_modules, stage_feature_info = make_blocks(
-            block, channels, layers, inplanes, in_shape=self.conv1.out_shape,
+            block, channels, layers, inplanes, in_shape=layer1_in_shape,
             cardinality=cardinality, base_width=base_width,
             reduce_first=block_reduce_first,
             avg_down=avg_down, down_kernel_size=down_kernel_size,
@@ -658,29 +672,29 @@ class ResNet(nn.Module):
 
     def forward_features(self, x):
         x = self.conv1(x)
-        self.ashape(x, self.conv1)
-        self.save(x, 0)
+        # self.ashape(x, self.conv1)
+        # self.save(x, 0)
         x = self.bn1(x)
-        self.save(x, 1)
+        # self.save(x, 1)
         x = self.act1(x)
-        self.save(x, 2)
+        # self.save(x, 2)
         if self.stem_pool != 1:
             x = self.maxpool(x)
         # self.save(x, 3)
 
         x = self.layer1(x)
-        self.ashape(x, self.layer1)
-        self.save(x, 4)
+        # self.ashape(x, self.layer1)
+        # self.save(x, 4)
         x = self.layer2(x)
-        self.ashape(x, self.layer2)
-        self.save(x, 5)
+        # self.ashape(x, self.layer2)
+        # self.save(x, 5)
         if len(self.layers) >= 3:
             x = self.layer3(x)
-            self.ashape(x, self.layer3)
-            self.save(x, 6)
+            # self.ashape(x, self.layer3)
+            # self.save(x, 6)
         if len(self.layers) >= 4:
             x = self.layer4(x)
-            self.save(x, 7)
+            # self.save(x, 7)
         return x
 
     def forward(self, x):
