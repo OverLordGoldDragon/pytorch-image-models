@@ -50,14 +50,33 @@ def _weight_init(m):
         nn.init.constant_(m.bias, 0.)
 
 
+
+def _max_pool_maker(dims):
+    mp_layer = getattr(nn, f'MaxPool{dims}d')
+    return lambda padding, **kwargs: MaxPoolNd(mp_layer, padding, **kwargs)
+
+    
+class MaxPoolNd(nn.Module):
+    def __init__(self, mp_layer, padding=0, **kwargs):
+        super().__init__()
+        self.mp_layer = mp_layer(**kwargs)
+        self.padding = padding
+        self.kwargs = kwargs
+        
+    def forward(self, x):
+        if self.padding != 0:
+            x = F.pad(x, self.padding)
+        return self.mp_layer(x)
+        
+
 def _set_layer_builders(self, dims):
     assert dims in (1, 2, 3), dims
     setattr(self, 'dims', dims)
     # setattr(self, '_conv', getattr(nn, f'Conv{dims}d'))
     setattr(self, '_norm', getattr(nn, f'BatchNorm{dims}d'))
-    setattr(self, '_max_pool', getattr(nn, f'MaxPool{dims}d'))
     setattr(self, 'mean', lambda x: x.mean(tuple(range(-dims, 0))[::-1],
                                            keepdim=True))
+    self._max_pool = _max_pool_maker(dims)
 
 
 class ConvPadNd(nn.Module):
@@ -111,7 +130,7 @@ class ConvPadNd(nn.Module):
 
     @staticmethod
     def compute_pad_amount(L, ks, s, d):
-        if s > 1:
+        if 0:#s > 1:
             pad = (math.ceil(ks / 2) if ks != 1 else
                    0)
         else:
@@ -362,10 +381,13 @@ def downsample_avg(
         if dims == 2:
             avg_pool_fn = (AvgPool2dSame if avg_stride == 1 and dilation > 1 else
                            nn.AvgPool2d)
-        else:
+        elif dims == 3:
             avg_pool_fn = (AvgPool3dSame if avg_stride == 1 and dilation > 1 else
                            nn.AvgPool3d)
-        pool = avg_pool_fn(2, avg_stride, ceil_mode=True, count_include_pad=False)
+        avg_kernel_size = (2 if avg_stride in (1, 2) else
+                           avg_stride + 1)
+        pool = avg_pool_fn(avg_kernel_size, avg_stride, ceil_mode=True, 
+                           count_include_pad=False)
 
     _conv = (nn.Conv1d, nn.Conv2d, nn.Conv3d)[dims - 1]
     return nn.Sequential(*[
@@ -523,7 +545,7 @@ class ResNet(nn.Module):
     """
 
     def __init__(self, block, layers, in_shape, num_classes=1000, in_chans=3,
-                 cardinality=1, base_width=64, stem_width=64, stem_type='',
+                 cardinality=1, base_width=64, stem_width=64, stem_kernel_size=7,
                  stem_groups=1, replace_stem_pool=False,
                  block_reduce_first=1, down_kernel_size=1, avg_down=False,
                  act_layer=nn.ReLU, norm_layer=None, aa_layer=None,
@@ -550,28 +572,10 @@ class ResNet(nn.Module):
         assert not (dims != 2 and drop_block_rate != 0), (dims, drop_block_rate)
 
         # Stem
-        deep_stem = 'deep' in stem_type
-        inplanes = stem_width * 2 if deep_stem else stem_width
-        if deep_stem:
-            raise NotImplementedError
-            stem_chs = (stem_width, stem_width)
-            if 'tiered' in stem_type:
-                stem_chs = (3 * (stem_width // 4), stem_width)
-            self.conv1 = nn.Sequential(*[
-                self._conv(in_chans, stem_chs[0], 3, stride=stem_stride,
-                           padding=1, bias=False),
-                norm_layer(stem_chs[0]),
-                act_layer(inplace=True),
-                self._conv(stem_chs[0], stem_chs[1], 3, stride=1, padding=1,
-                           bias=False),
-                norm_layer(stem_chs[1]),
-                act_layer(inplace=True),
-                self._conv(stem_chs[1], inplanes, 3, stride=1, padding=1,
-                           bias=False)])
-        else:
-            self.conv1 = self._conv(in_shape, in_chans, inplanes, kernel_size=7,
-                                    stride=stem_stride, #padding=3,
-                                    bias=False, groups=stem_groups)
+        inplanes = stem_width
+        self.conv1 = self._conv(in_shape, in_chans, inplanes, 
+                                kernel_size=stem_kernel_size, stride=stem_stride,
+                                bias=False, groups=stem_groups)
         self.bn1 = norm_layer(inplanes)
         self.act1 = act_layer(inplace=True)
         self.feature_info = [dict(num_chs=inplanes, reduction=2, module='act1')]
@@ -583,24 +587,21 @@ class ResNet(nn.Module):
             mp_pad_orig = tuple(ConvPadNd.compute_pad_shape(
                 self.conv1.out_shape, ks=stem_pool_kernel_size, s=stem_pool, d=1)
                 )
-            mp_pad = mp_pad_orig[::-1]
-            assert mp_pad[0] == mp_pad[1], mp_pad
-            if len(mp_pad) > 2:
-                assert mp_pad[2] == mp_pad[3], mp_pad
-            if len(mp_pad) > 4:
-                assert mp_pad[4] == mp_pad[5], mp_pad
-            if len(mp_pad) == 2:
-                mp_pad = mp_pad[0]
-            elif len(mp_pad) == 4:
-                mp_pad = (mp_pad[0], mp_pad[2])
-            else:
-                mp_pad = (mp_pad[0], mp_pad[2], mp_pad[4])
+            mp_pad = mp_pad_orig#[::-1]
+            # assert mp_pad[0] == mp_pad[1], mp_pad
+            # if len(mp_pad) > 2:
+            #     assert mp_pad[2] == mp_pad[3], mp_pad
+            # if len(mp_pad) > 4:
+            #     assert mp_pad[4] == mp_pad[5], mp_pad
+            # if len(mp_pad) == 2:
+            #     mp_pad = mp_pad[0]
+            # elif len(mp_pad) == 4:
+            #     mp_pad = (mp_pad[0], mp_pad[2])
+            # else:
+            #     mp_pad = (mp_pad[0], mp_pad[2], mp_pad[4])
             
             if aa_layer is not None:
-                self.maxpool = nn.Sequential(*[
-                    self._max_pool(kernel_size=stem_pool_kernel_size,
-                                   stride=stem_pool, padding=mp_pad),
-                    aa_layer(channels=inplanes, stride=stem_pool)])
+                raise NotImplementedError
             else:
                 self.maxpool = self._max_pool(kernel_size=stem_pool_kernel_size,
                                               stride=stem_pool, padding=mp_pad)
@@ -672,7 +673,7 @@ class ResNet(nn.Module):
 
     def forward_features(self, x):
         x = self.conv1(x)
-        # self.ashape(x, self.conv1)
+        self.ashape(x, self.conv1)
         # self.save(x, 0)
         x = self.bn1(x)
         # self.save(x, 1)
@@ -683,14 +684,14 @@ class ResNet(nn.Module):
         # self.save(x, 3)
 
         x = self.layer1(x)
-        # self.ashape(x, self.layer1)
+        self.ashape(x, self.layer1)
         # self.save(x, 4)
         x = self.layer2(x)
-        # self.ashape(x, self.layer2)
+        self.ashape(x, self.layer2)
         # self.save(x, 5)
         if len(self.layers) >= 3:
             x = self.layer3(x)
-            # self.ashape(x, self.layer3)
+            self.ashape(x, self.layer3)
             # self.save(x, 6)
         if len(self.layers) >= 4:
             x = self.layer4(x)
