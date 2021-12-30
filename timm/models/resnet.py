@@ -219,10 +219,12 @@ class BasicBlock(nn.Module):
 
         conv1_in_shape = (self.in_shape if self._max_pool is None else
                           self._max_pool.out_shape)
+        conv1_stride = (stride if self._max_pool is None else
+                        1)
 
         self.conv1 = self._conv(
             conv1_in_shape, inplanes, first_planes, kernel_size=kernel_size,
-            stride=1, #padding='same',
+            stride=conv1_stride, #padding='same',
             dilation=first_dilation, groups=groups, bias=False)
         self.bn1 = norm_layer(first_planes)
         self.act1 = act_layer(inplace=True)
@@ -282,10 +284,7 @@ class BasicBlock(nn.Module):
         if self.downsample is not None:
             shortcut = self.downsample(shortcut)
         # print(x.shape, shortcut.shape)
-        # try:
         x += shortcut
-        # except:
-        #     1/0
         x = self.act2(x)
 
         return x
