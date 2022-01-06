@@ -15,10 +15,10 @@ from .lambda_layer import LambdaLayer
 from .non_local_attn import NonLocalAttn, BatNonLocalAttn
 from .selective_kernel import SelectiveKernel
 from .split_attn import SplitAttn
-from .squeeze_excite import SEModuleNd, EffectiveSEModule
+from .squeeze_excite import SEModuleNd, ChannelSELayerNd, EffectiveSEModule
 
 
-def get_attn(attn_type, dims=2):
+def get_attn(attn_type):
     if isinstance(attn_type, torch.nn.Module):
         return attn_type
     module_cls = None
@@ -29,6 +29,8 @@ def get_attn(attn_type, dims=2):
             # Typically added to existing network architecture blocks in addition to existing convolutions.
             if attn_type == 'se':
                 module_cls = SEModuleNd
+            elif attn_type == 'se-channel':
+                module_cls = ChannelSELayerNd
             elif attn_type == 'ese':
                 module_cls = EffectiveSEModule
             elif attn_type == 'eca':
@@ -82,8 +84,9 @@ def get_attn(attn_type, dims=2):
 
 
 def create_attn(attn_type, channels, **kwargs):
-    module_cls = get_attn(attn_type, kwargs.get('dims', 2))
+    module_cls = get_attn(attn_type)
     if module_cls is not None:
-        # NOTE: it's expected the first (positional) argument of all attention layers is the # input channels
+        # NOTE: it's expected the first (positional) argument of all
+        # attention layers is the # input channels
         return module_cls(channels, **kwargs)
     return None

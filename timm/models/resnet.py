@@ -188,7 +188,7 @@ class BasicBlock(nn.Module):
     def __init__(self, in_shape, inplanes, planes, stride=1, downsample=None,
                  cardinality=1, base_width=64, reduce_first=1, dilation=1,
                  first_dilation=None, act_layer=nn.ReLU,
-                 norm_layer=nn.BatchNorm2d,attn_layer=None, aa_layer=None,
+                 norm_layer=nn.BatchNorm2d, attn_layer=None, aa_layer=None,
                  drop_block=None, drop_path=None, groups=1, kernel_size=3,
                  use_mp=False, residual=True, dims=2):
         super(BasicBlock, self).__init__()
@@ -448,7 +448,7 @@ def make_blocks(
         down_kernel_size=1, avg_down=False, drop_block_rate=0.,
         drop_path_rate=0., layer_groups=(1, 1, 1), layer_kernel_sizes=(3, 3, 3),
         layer_stride=(1, 1, 1), layer_use_mp=(0, 0, 0),
-        layer_residual=(1, 1, 1), dims=2, **kwargs):
+        layer_residual=(1, 1, 1), attn_layer=None, dims=2, **kwargs):
     stages = []
     feature_info = []
     net_num_blocks = sum(block_repeats)
@@ -478,7 +478,7 @@ def make_blocks(
                             drop_block=db, groups=layer_groups[stage_idx],
                             kernel_size=layer_kernel_sizes[stage_idx],
                             use_mp=use_mp, residual=layer_residual[stage_idx],
-                            dims=dims, **kwargs)
+                            attn_layer=attn_layer, dims=dims, **kwargs)
         blocks = []
         for block_idx in range(num_blocks):
             downsample = downsample if block_idx == 0 else None
@@ -596,7 +596,8 @@ class ResNet(nn.Module):
                  stem_pool_kernel_size=3,
                  layer_groups=(1, 1, 1, 1), layer_kernel_sizes=(3, 3, 3, 3),
                  stride=(1, 1, 1, 1), layer_use_mp=(0, 0, 0, 0),
-                 layer_residual=(1, 1, 1, 1), include_classifier=True, dims=2):
+                 layer_residual=(1, 1, 1, 1), attn_layer=None,
+                 include_classifier=True, dims=2):
         block_args = block_args or dict()
         self.layers = layers
         self.in_shape = in_shape
@@ -669,7 +670,7 @@ class ResNet(nn.Module):
             drop_block_rate=drop_block_rate, drop_path_rate=drop_path_rate,
             layer_groups=layer_groups, layer_kernel_sizes=layer_kernel_sizes,
             layer_stride=stride, layer_use_mp=layer_use_mp,
-            layer_residual=layer_residual, dims=dims,
+            layer_residual=layer_residual, attn_layer=attn_layer, dims=dims,
             **block_args)
         for stage in stage_modules:
             self.add_module(*stage)  # layer1, layer2, etc
