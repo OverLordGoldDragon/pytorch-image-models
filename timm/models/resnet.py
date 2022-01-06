@@ -596,7 +596,7 @@ class ResNet(nn.Module):
                  stem_pool_kernel_size=3,
                  layer_groups=(1, 1, 1, 1), layer_kernel_sizes=(3, 3, 3, 3),
                  stride=(1, 1, 1, 1), layer_use_mp=(0, 0, 0, 0),
-                 layer_residual=(1, 1, 1, 1), attn_layer=None,
+                 layer_residual=(1, 1, 1, 1), attn_layer='se',
                  include_classifier=True, dims=2):
         block_args = block_args or dict()
         self.layers = layers
