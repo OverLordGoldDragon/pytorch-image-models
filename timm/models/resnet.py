@@ -190,11 +190,12 @@ class BasicBlock(nn.Module):
                  first_dilation=None, act_layer=nn.ReLU,
                  norm_layer=nn.BatchNorm2d,attn_layer=None, aa_layer=None,
                  drop_block=None, drop_path=None, groups=1, kernel_size=3,
-                 use_mp=False, dims=2):
+                 use_mp=False, residual=True, dims=2):
         super(BasicBlock, self).__init__()
         _set_layer_builders(self, dims)
         self._conv = ConvPadNd
         self.in_shape = in_shape
+        self.residual = residual
 
         assert cardinality == 1, 'BasicBlock only supports cardinality of 1'
         assert base_width == 64, 'BasicBlock does not support changing base width'
@@ -257,7 +258,8 @@ class BasicBlock(nn.Module):
         # print(x.shape)
         if self._max_pool is not None:
             x = self._max_pool(x)
-        shortcut = x
+        if self.residual:
+            shortcut = x
         # print(x.shape)
 
         x = self.conv1(x)
@@ -281,10 +283,11 @@ class BasicBlock(nn.Module):
         if self.drop_path is not None:
             x = self.drop_path(x)
 
-        if self.downsample is not None:
+        if self.residual and self.downsample is not None:
             shortcut = self.downsample(shortcut)
         # print(x.shape, shortcut.shape)
-        x += shortcut
+        if self.residual:
+            x += shortcut
         x = self.act2(x)
 
         return x
@@ -444,7 +447,8 @@ def make_blocks(
         block_fn, channels, block_repeats, inplanes, in_shape, reduce_first=1,
         down_kernel_size=1, avg_down=False, drop_block_rate=0.,
         drop_path_rate=0., layer_groups=(1, 1, 1), layer_kernel_sizes=(3, 3, 3),
-        layer_stride=(1, 1, 1), layer_use_mp=(0, 0, 0), dims=2, **kwargs):
+        layer_stride=(1, 1, 1), layer_use_mp=(0, 0, 0),
+        layer_residual=(1, 1, 1), dims=2, **kwargs):
     stages = []
     feature_info = []
     net_num_blocks = sum(block_repeats)
@@ -473,7 +477,8 @@ def make_blocks(
         block_kwargs = dict(reduce_first=reduce_first, dilation=dilation,
                             drop_block=db, groups=layer_groups[stage_idx],
                             kernel_size=layer_kernel_sizes[stage_idx],
-                            use_mp=use_mp, dims=dims, **kwargs)
+                            use_mp=use_mp, residual=layer_residual[stage_idx],
+                            dims=dims, **kwargs)
         blocks = []
         for block_idx in range(num_blocks):
             downsample = downsample if block_idx == 0 else None
@@ -591,7 +596,7 @@ class ResNet(nn.Module):
                  stem_pool_kernel_size=3,
                  layer_groups=(1, 1, 1, 1), layer_kernel_sizes=(3, 3, 3, 3),
                  stride=(1, 1, 1, 1), layer_use_mp=(0, 0, 0, 0),
-                 include_classifier=True, dims=2):
+                 layer_residual=(1, 1, 1, 1), include_classifier=True, dims=2):
         block_args = block_args or dict()
         self.layers = layers
         self.in_shape = in_shape
@@ -604,6 +609,11 @@ class ResNet(nn.Module):
         _set_layer_builders(self, dims)
         self._conv = ConvPadNd
         norm_layer = norm_layer or self._norm
+
+        self.sanity_checks = True
+        self.n_sanity_checked = 0
+        self.n_sanity_checks = 20
+        self.n_layers = len(self.layers)
 
         assert not (dims != 2 and drop_block_rate != 0), (dims, drop_block_rate)
 
@@ -658,7 +668,8 @@ class ResNet(nn.Module):
             act_layer=act_layer, norm_layer=norm_layer, aa_layer=aa_layer,
             drop_block_rate=drop_block_rate, drop_path_rate=drop_path_rate,
             layer_groups=layer_groups, layer_kernel_sizes=layer_kernel_sizes,
-            layer_stride=stride, layer_use_mp=layer_use_mp, dims=dims,
+            layer_stride=stride, layer_use_mp=layer_use_mp,
+            layer_residual=layer_residual, dims=dims,
             **block_args)
         for stage in stage_modules:
             self.add_module(*stage)  # layer1, layer2, etc
@@ -701,16 +712,19 @@ class ResNet(nn.Module):
         if self.save_outs:
             torch.save(x.detach().cpu().numpy(), f'{i}b.npy')
 
-    @staticmethod
-    def ashape(a, b):
-        a = tuple(a.shape)
-        b = (b[-1].out_shape if isinstance(b, nn.Sequential) else
-             b.out_shape)
-        assert a == b, (a, b)
+    def ashape(self, a, b):
+        if self.sanity_checks:
+            a = tuple(a.shape)
+            b = (b[-1].out_shape if isinstance(b, nn.Sequential) else
+                 b.out_shape)
+            assert a == b, (a, b)
+            self.n_sanity_checked += 1
+            if self.n_sanity_checked >= self.n_sanity_checks:
+                self.sanity_checks = False
 
     def forward_features(self, x):
         x = self.conv1(x)
-        # self.ashape(x, self.conv1)
+        self.ashape(x, self.conv1)
         # self.save(x, 0)
         x = self.bn1(x)
         # self.save(x, 1)
@@ -721,17 +735,20 @@ class ResNet(nn.Module):
         # self.save(x, 3)
 
         x = self.layer1(x)
-        # self.ashape(x, self.layer1)
+        self.ashape(x, self.layer1)
         # self.save(x, 4)
         x = self.layer2(x)
-        # self.ashape(x, self.layer2)
+        self.ashape(x, self.layer2)
         # self.save(x, 5)
-        if len(self.layers) >= 3:
+
+        if self.n_layers >= 3:
             x = self.layer3(x)
-            # self.ashape(x, self.layer3)
+            self.ashape(x, self.layer3)
             # self.save(x, 6)
-        if len(self.layers) >= 4:
+
+        if self.n_layers >= 4:
             x = self.layer4(x)
+            self.ashape(x, self.layer4)
             # self.save(x, 7)
         return x
 
@@ -745,19 +762,19 @@ class ResNet(nn.Module):
             else:
                 l = F.dropout
             x = l(x, p=float(self.in_drop_rate), training=self.training)
-            self.save(x, -1)
+            # self.save(x, -1)
 
         x = self.forward_features(x)
         x = self.global_pool(x)
-        self.save(x, 9)
+        # self.save(x, 9)
 
         if self.out_drop_rate:
             x = F.dropout(x, p=float(self.out_drop_rate), training=self.training)
-        self.save(x, 10)
+        # self.save(x, 10)
 
         if self.fc is not None:
             x = self.fc(x)
-            self.save(x, 11)
+            # self.save(x, 11)
         return x
 
 
