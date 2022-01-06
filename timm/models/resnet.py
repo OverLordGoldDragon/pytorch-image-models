@@ -711,7 +711,8 @@ class ResNet(nn.Module):
         if not hasattr(self, 'save_outs'):
             self.save_outs = False
         if self.save_outs:
-            torch.save(x.detach().cpu().numpy(), f'{i}b.npy')
+            import numpy as np
+            np.save(f'{i}.npy', x.detach().cpu().numpy())
 
     def ashape(self, a, b):
         if self.sanity_checks:
@@ -726,31 +727,31 @@ class ResNet(nn.Module):
     def forward_features(self, x):
         x = self.conv1(x)
         self.ashape(x, self.conv1)
-        # self.save(x, 0)
+        self.save(x, 0)
         x = self.bn1(x)
-        # self.save(x, 1)
+        self.save(x, 1)
         x = self.act1(x)
-        # self.save(x, 2)
+        self.save(x, 2)
         if self.stem_pool != 1:
             x = self.maxpool(x)
-        # self.save(x, 3)
+        self.save(x, 3)
 
         x = self.layer1(x)
         self.ashape(x, self.layer1)
-        # self.save(x, 4)
+        self.save(x, 4)
         x = self.layer2(x)
         self.ashape(x, self.layer2)
-        # self.save(x, 5)
+        self.save(x, 5)
 
         if self.n_layers >= 3:
             x = self.layer3(x)
             self.ashape(x, self.layer3)
-            # self.save(x, 6)
+            self.save(x, 6)
 
         if self.n_layers >= 4:
             x = self.layer4(x)
             self.ashape(x, self.layer4)
-            # self.save(x, 7)
+            self.save(x, 7)
         return x
 
     def forward(self, x):
@@ -763,19 +764,19 @@ class ResNet(nn.Module):
             else:
                 l = F.dropout
             x = l(x, p=float(self.in_drop_rate), training=self.training)
-            # self.save(x, -1)
+            self.save(x, -1)
 
         x = self.forward_features(x)
         x = self.global_pool(x)
-        # self.save(x, 9)
+        self.save(x, 9)
 
         if self.out_drop_rate:
             x = F.dropout(x, p=float(self.out_drop_rate), training=self.training)
-        # self.save(x, 10)
+        self.save(x, 10)
 
         if self.fc is not None:
             x = self.fc(x)
-            # self.save(x, 11)
+            self.save(x, 11)
         return x
 
 
