@@ -166,7 +166,7 @@ class ChannelSpatialSELayerNd(nn.Module):
            *Roy et al., Concurrent Spatial and Channel Squeeze & Excitation in Fully Convolutional Networks, arXiv:1803.02579*
        """
 
-    def __init__(self, num_channels, reduction_ratio=2, dims=3):
+    def __init__(self, num_channels, reduction_ratio=16, dims=3):
         """
         :param num_channels: No of input channels
         :param reduction_ratio: By how much should the num_channels should be reduced
