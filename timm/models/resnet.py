@@ -447,20 +447,20 @@ def make_blocks(
         block_fn, channels, block_repeats, inplanes, in_shape, reduce_first=1,
         down_kernel_size=1, avg_down=False, drop_block_rate=0.,
         drop_path_rate=0., layer_groups=(1, 1, 1), layer_kernel_sizes=(3, 3, 3),
-        layer_stride=(1, 1, 1), layer_use_mp=(0, 0, 0),
+        layer_stride=(1, 1, 1), layer_dilation=(1, 1, 1), layer_use_mp=(0, 0, 0),
         layer_residual=(1, 1, 1), attn_layer=None, dims=2, **kwargs):
     stages = []
     feature_info = []
     net_num_blocks = sum(block_repeats)
     net_block_idx = 0
     net_stride = 4
-    dilation = prev_dilation = 1
+    prev_dilation = 1
     for stage_idx, (planes, num_blocks, db) in enumerate(zip(
             channels, block_repeats, drop_blocks(drop_block_rate))):
         # never liked this name, but weight compat requires it
         stage_name = f'layer{stage_idx + 1}'
-        s = layer_stride[stage_idx]
-        use_mp = layer_use_mp[stage_idx]
+        s, use_mp, dilation = [var[stage_idx] for var in
+                               (layer_stride, layer_use_mp, layer_dilation)]
         downsample = None
 
         if s != 1 or inplanes != planes * block_fn.expansion:
@@ -488,10 +488,10 @@ def make_blocks(
                 in_shape, inplanes, planes, s, downsample,
                 first_dilation=prev_dilation, drop_path=None,
                 **block_kwargs))
-            prev_dilation = dilation
             inplanes = planes * block_fn.expansion
             in_shape = blocks[-1].out_shape
             net_block_idx += 1
+        prev_dilation = dilation
 
         stages.append((stage_name, nn.Sequential(*blocks)))
         feature_info.append(dict(num_chs=inplanes, reduction=net_stride,
@@ -595,9 +595,9 @@ class ResNet(nn.Module):
                  channels=(64, 128, 256, 512), stem_stride=2, stem_pool=2,
                  stem_pool_kernel_size=3,
                  layer_groups=(1, 1, 1, 1), layer_kernel_sizes=(3, 3, 3, 3),
-                 stride=(1, 1, 1, 1), layer_use_mp=(0, 0, 0, 0),
-                 layer_residual=(1, 1, 1, 1), attn_layer='se',
-                 include_classifier=True, dims=2):
+                 stride=(1, 1, 1, 1), layer_dilation=(1, 1, 1, 1),
+                 layer_use_mp=(0, 0, 0, 0), layer_residual=(1, 1, 1, 1),
+                 attn_layer='se', include_classifier=True, dims=2):
         block_args = block_args or dict()
         self.layers = layers
         self.in_shape = in_shape
@@ -669,9 +669,9 @@ class ResNet(nn.Module):
             act_layer=act_layer, norm_layer=norm_layer, aa_layer=aa_layer,
             drop_block_rate=drop_block_rate, drop_path_rate=drop_path_rate,
             layer_groups=layer_groups, layer_kernel_sizes=layer_kernel_sizes,
-            layer_stride=stride, layer_use_mp=layer_use_mp,
-            layer_residual=layer_residual, attn_layer=attn_layer, dims=dims,
-            **block_args)
+            layer_stride=stride, layer_dilation=layer_dilation,
+            layer_use_mp=layer_use_mp, layer_residual=layer_residual,
+            attn_layer=attn_layer, dims=dims, **block_args)
         for stage in stage_modules:
             self.add_module(*stage)  # layer1, layer2, etc
         self.feature_info.extend(stage_feature_info)
