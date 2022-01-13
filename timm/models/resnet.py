@@ -296,13 +296,17 @@ class BasicBlock(nn.Module):
 class Bottleneck(nn.Module):
     expansion = 4
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, cardinality=1,
-                 base_width=64, reduce_first=1, dilation=1, first_dilation=None,
-                 act_layer=nn.ReLU, norm_layer=None, attn_layer=None,
-                 aa_layer=None, drop_block=None, drop_path=None, dims=2):
+    def __init__(self, in_shape, inplanes, planes, stride=1, downsample=None,
+                 cardinality=1, base_width=64, reduce_first=1, dilation=1,
+                 groups=1, first_dilation=None, act_layer=nn.ReLU,
+                 norm_layer=None, attn_layer=None, aa_layer=None, drop_block=None,
+                 drop_path=None, kernel_size=3, use_mp=False, residual=True,
+                 dims=2):
         super(Bottleneck, self).__init__()
         _set_layer_builders(self, dims)
         self._conv = ConvPadNd
+        self.in_shape = in_shape
+        self.residual = residual
         norm_layer = norm_layer or self._norm
 
         width = int(math.floor(planes * (base_width / 64)) * cardinality)
@@ -312,19 +316,40 @@ class Bottleneck(nn.Module):
         use_aa = aa_layer is not None and (stride == 2 or
                                            first_dilation != dilation)
 
-        self.conv1 = self._conv(inplanes, first_planes, kernel_size=1, bias=False)
+        if use_aa:
+            raise NotImplementedError
+
+        if use_mp and (stride != 1 or (isinstance(stride, tuple) and
+                                       not all(s == 1 for s in stride))):
+            mp_pad = tuple(ConvPadNd.compute_pad_shape(
+                in_shape, ks=stride, s=stride, d=1)
+                )
+            self._max_pool = _max_pool_maker(dims)(
+                padding=mp_pad, in_shape=self.in_shape,
+                stride=stride, kernel_size=stride)
+        else:
+            self._max_pool = None
+
+        conv1_in_shape = (self.in_shape if self._max_pool is None else
+                          self._max_pool.out_shape)
+        conv2_stride = (stride if self._max_pool is None else
+                        1)
+
+        self.conv1 = self._conv(conv1_in_shape, inplanes, first_planes,
+                                kernel_size=1, bias=False)
         self.bn1 = norm_layer(first_planes)
         self.act1 = act_layer(inplace=True)
 
         self.conv2 = self._conv(
-            first_planes, width, kernel_size=3, stride=1 if use_aa else stride,
-            dilation=first_dilation, #padding=first_dilation,
-            groups=cardinality, bias=False)
+            self.conv1.out_shape, first_planes, width, kernel_size=kernel_size,
+            stride=conv2_stride, dilation=first_dilation, groups=groups,
+            bias=False)
         self.bn2 = norm_layer(width)
         self.act2 = act_layer(inplace=True)
         self.aa = aa_layer(channels=width, stride=stride) if use_aa else None
 
-        self.conv3 = self._conv(width, outplanes, kernel_size=1, bias=False)
+        self.conv3 = self._conv(self.conv2.out_shape, width, outplanes,
+                                kernel_size=1, bias=False)
         self.bn3 = norm_layer(outplanes)
 
         self.se = create_attn(attn_layer, outplanes, dims=dims)
@@ -336,10 +361,14 @@ class Bottleneck(nn.Module):
         self.drop_block = drop_block
         self.drop_path = drop_path
 
+        self.out_shape = self.conv3.out_shape
+
     def zero_init_last_bn(self):
         nn.init.zeros_(self.bn3.weight)
 
     def forward(self, x):
+        if self._max_pool is not None:
+            x = self._max_pool(x)
         shortcut = x
 
         x = self.conv1(x)
@@ -719,6 +748,7 @@ class ResNet(nn.Module):
             a = tuple(a.shape)
             b = (b[-1].out_shape if isinstance(b, nn.Sequential) else
                  b.out_shape)
+            a = tuple([int(g) for g in a])
             assert a == b, (a, b)
             self.n_sanity_checked += 1
             if self.n_sanity_checked >= self.n_sanity_checks:
