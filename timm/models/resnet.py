@@ -484,8 +484,8 @@ def make_blocks(
     net_block_idx = 0
     net_stride = 4
     prev_dilation = 1
-    for stage_idx, (planes, num_blocks, db) in enumerate(zip(
-            channels, block_repeats, drop_blocks(drop_block_rate))):
+    for stage_idx, (planes, num_blocks) in enumerate(zip(
+            channels, block_repeats)):
         # never liked this name, but weight compat requires it
         stage_name = f'layer{stage_idx + 1}'
         s, use_mp, dilation = [var[stage_idx] for var in
@@ -504,7 +504,7 @@ def make_blocks(
                           downsample_conv(**down_kwargs))
 
         block_kwargs = dict(reduce_first=reduce_first, dilation=dilation,
-                            drop_block=db, groups=layer_groups[stage_idx],
+                            groups=layer_groups[stage_idx],
                             kernel_size=layer_kernel_sizes[stage_idx],
                             use_mp=use_mp, residual=layer_residual[stage_idx],
                             attn_layer=attn_layer, dims=dims, **kwargs)
@@ -782,6 +782,11 @@ class ResNet(nn.Module):
             x = self.layer4(x)
             self.ashape(x, self.layer4)
             self.save(x, 7)
+
+        if self.n_layers >= 5:
+            x = self.layer5(x)
+            self.ashape(x, self.layer5)
+            self.save(x, 8)
         return x
 
     def forward(self, x):
