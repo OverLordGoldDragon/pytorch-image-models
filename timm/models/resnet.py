@@ -658,7 +658,8 @@ class ResNet(nn.Module):
         self.n_sanity_checks = 20
         self.n_layers = len(self.layers)
 
-        assert not (dims != 2 and drop_block_rate != 0), (dims, drop_block_rate)
+        assert not (dims != 2 and any(d != 0 for d in drop_block_rate)
+                    ), (dims, drop_block_rate)
 
         # Stem
         inplanes = stem_width
