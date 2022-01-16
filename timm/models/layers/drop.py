@@ -14,9 +14,31 @@ DropBlock impl inspired by two Tensorflow impl that I liked:
 
 Hacked together by / Copyright 2020 Ross Wightman
 """
-import torch
+import torch, math
 import torch.nn as nn
 import torch.nn.functional as F
+
+
+def compute_same_pad(L, ks, s, d=1):
+    if isinstance(L, tuple):
+        if not isinstance(ks, tuple):
+            ks = (ks,) * len(L)
+        if not isinstance(s, tuple):
+            s = (s,) * len(L)
+        if not isinstance(d, tuple):
+            d = (d,) * len(L)
+        return tuple([p for _L, _ks, _s, _d in zip(L, ks, s, d)
+                      for p in _compute_same_pad(_L, _ks, _s, _d)])
+    return _compute_same_pad(L, ks, s, d)
+
+
+def _compute_same_pad(L, ks, s, d):
+    out = (math.ceil(L / s) - 1) * s + (ks - 1) * d + 1 - L
+    if out % 2 == 0:
+        out = (out//2, out//2)
+    else:
+        out = (out//2 + 1, out//2)
+    return out
 
 
 def drop_block_2d(
@@ -28,16 +50,27 @@ def drop_block_2d(
     runs with success, but needs further validation and possibly optimization for lower runtime impact.
     """
     B, C, H, W = x.shape
+    if H > W:
+        block_size = (int(H / W * block_size), block_size)
+    else:
+        block_size = (block_size, int(W / H) * block_size)
     total_size = W * H
-    clipped_block_size = min(block_size, min(W, H))
+    clipped_block_size = (min(block_size[0], W),
+                          min(block_size[1], H))
     # seed_drop_rate, the gamma parameter
-    gamma = gamma_scale * drop_prob * total_size / clipped_block_size ** 2 / (
-        (W - block_size + 1) * (H - block_size + 1))
+    gamma = gamma_scale * drop_prob * total_size / (
+        clipped_block_size[0] * clipped_block_size[1]) / (
+        (W - block_size[0] + 1) * (H - block_size[1] + 1))
 
     # Forces the block to be inside the feature map.
     w_i, h_i = torch.meshgrid(torch.arange(W).to(x.device), torch.arange(H).to(x.device))
-    valid_block = ((w_i >= clipped_block_size // 2) & (w_i < W - (clipped_block_size - 1) // 2)) & \
-                  ((h_i >= clipped_block_size // 2) & (h_i < H - (clipped_block_size - 1) // 2))
+    valid_block = (
+        ((w_i >= clipped_block_size[0] // 2) &
+         (w_i < W - (clipped_block_size[0] - 1) // 2))
+        &
+        ((h_i >= clipped_block_size[1] // 2) &
+         (h_i < H - (clipped_block_size[1] - 1) // 2))
+    )
     valid_block = torch.reshape(valid_block, (1, 1, H, W)).to(dtype=x.dtype)
 
     if batchwise:
@@ -46,11 +79,13 @@ def drop_block_2d(
     else:
         uniform_noise = torch.rand_like(x)
     block_mask = ((2 - gamma - valid_block + uniform_noise) >= 1).to(dtype=x.dtype)
+    pad = compute_same_pad((H, W), clipped_block_size, s=1)
+    block_mask = F.pad(block_mask, pad)
     block_mask = -F.max_pool2d(
         -block_mask,
         kernel_size=clipped_block_size,  # block_size,
         stride=1,
-        padding=clipped_block_size // 2)
+        padding=0)
 
     if with_noise:
         normal_noise = torch.randn((1, C, H, W), dtype=x.dtype, device=x.device) if batchwise else torch.randn_like(x)
