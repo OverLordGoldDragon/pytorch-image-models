@@ -474,10 +474,14 @@ def drop_blocks(drop_block_rate=0.):
 
 def make_blocks(
         block_fn, channels, block_repeats, inplanes, in_shape, reduce_first=1,
-        down_kernel_size=1, avg_down=False, drop_block_rate=0.,
+        down_kernel_size=1, avg_down=False,
         drop_path_rate=0., layer_groups=(1, 1, 1), layer_kernel_sizes=(3, 3, 3),
         layer_stride=(1, 1, 1), layer_dilation=(1, 1, 1), layer_use_mp=(0, 0, 0),
-        layer_residual=(1, 1, 1), attn_layer=None, dims=2, **kwargs):
+        layer_residual=(1, 1, 1),
+        drop_block_rate=(0, 0, 0),
+        drop_block_size=(3, 3, 3),
+        drop_block_gamma_scale=(1, 1, 1),
+        attn_layer=None, dims=2, **kwargs):
     stages = []
     feature_info = []
     net_num_blocks = sum(block_repeats)
@@ -503,11 +507,18 @@ def make_blocks(
             downsample = (downsample_avg(**down_kwargs) if avg_down else
                           downsample_conv(**down_kwargs))
 
+        if stage_idx < len(drop_block_rate) and drop_block_rate[stage_idx] != 0:
+            drop_block = DropBlock2d(
+                drop_block_rate[stage_idx], block_size=drop_block_size[stage_idx],
+                gamma_scale=drop_block_gamma_scale[stage_idx])
+        else:
+            drop_block = None
         block_kwargs = dict(reduce_first=reduce_first, dilation=dilation,
                             groups=layer_groups[stage_idx],
                             kernel_size=layer_kernel_sizes[stage_idx],
                             use_mp=use_mp, residual=layer_residual[stage_idx],
-                            attn_layer=attn_layer, dims=dims, **kwargs)
+                            attn_layer=attn_layer, drop_block=drop_block,
+                            dims=dims, **kwargs)
         blocks = []
         for block_idx in range(num_blocks):
             downsample = downsample if block_idx == 0 else None
@@ -619,8 +630,9 @@ class ResNet(nn.Module):
                  block_reduce_first=1, down_kernel_size=1, avg_down=False,
                  act_layer=nn.ReLU, norm_layer=None, aa_layer=None,
                  in_drop_rate=0., out_drop_rate=0., drop_path_rate=0.,
-                 drop_block_rate=0., in_spatial_dropout=True, global_pool='avg',
-                 zero_init_last_bn=True, block_args=None,
+                 drop_block_rate=(0, 0, 0, 0), drop_block_size=(3, 3, 3, 3),
+                 drop_block_gamma_scale=(1, 1, 1, 1), in_spatial_dropout=True,
+                 global_pool='avg', zero_init_last_bn=True, block_args=None,
                  channels=(64, 128, 256, 512), stem_stride=2, stem_pool=2,
                  stem_pool_kernel_size=3,
                  layer_groups=(1, 1, 1, 1), layer_kernel_sizes=(3, 3, 3, 3),
@@ -696,7 +708,9 @@ class ResNet(nn.Module):
             reduce_first=block_reduce_first,
             avg_down=avg_down, down_kernel_size=down_kernel_size,
             act_layer=act_layer, norm_layer=norm_layer, aa_layer=aa_layer,
-            drop_block_rate=drop_block_rate, drop_path_rate=drop_path_rate,
+            drop_block_rate=drop_block_rate, drop_block_size=drop_block_size,
+            drop_block_gamma_scale=drop_block_gamma_scale,
+            drop_path_rate=drop_path_rate,
             layer_groups=layer_groups, layer_kernel_sizes=layer_kernel_sizes,
             layer_stride=stride, layer_dilation=layer_dilation,
             layer_use_mp=layer_use_mp, layer_residual=layer_residual,
