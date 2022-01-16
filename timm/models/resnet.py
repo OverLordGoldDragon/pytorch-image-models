@@ -465,11 +465,11 @@ def downsample_avg(
     ])
 
 
-def drop_blocks(drop_block_rate=0.):
-    return [
-        None, None,
-        DropBlock2d(drop_block_rate, 5, 0.25) if drop_block_rate else None,
-        DropBlock2d(drop_block_rate, 3, 1.00) if drop_block_rate else None]
+# def drop_blocks(drop_block_rate=0.):
+#     return [
+#         None, None,
+#         DropBlock2d(drop_block_rate, 5, 0.25) if drop_block_rate else None,
+#         DropBlock2d(drop_block_rate, 3, 1.00) if drop_block_rate else None]
 
 
 def make_blocks(
@@ -508,9 +508,10 @@ def make_blocks(
                           downsample_conv(**down_kwargs))
 
         if stage_idx < len(drop_block_rate) and drop_block_rate[stage_idx] != 0:
-            drop_block = DropBlock2d(
-                drop_block_rate[stage_idx], block_size=drop_block_size[stage_idx],
-                gamma_scale=drop_block_gamma_scale[stage_idx])
+            _get = lambda ls: ls[stage_idx] if stage_idx < len(ls) else ls[-1]
+            drop_block = DropBlock2d(drop_block_rate[stage_idx],
+                                     block_size=_get(drop_block_size),
+                                     gamma_scale=_get(drop_block_gamma_scale))
         else:
             drop_block = None
         block_kwargs = dict(reduce_first=reduce_first, dilation=dilation,
@@ -634,8 +635,8 @@ class ResNet(nn.Module):
                  drop_block_gamma_scale=(1, 1, 1, 1), in_spatial_dropout=True,
                  global_pool='avg', zero_init_last_bn=True, block_args=None,
                  channels=(64, 128, 256, 512), stem_stride=2, stem_pool=2,
-                 stem_pool_kernel_size=3,
-                 layer_groups=(1, 1, 1, 1), layer_kernel_sizes=(3, 3, 3, 3),
+                 stem_pool_kernel_size=3, layer_groups=(1, 1, 1, 1),
+                 layer_kernel_sizes=(3, 3, 3, 3),
                  stride=(1, 1, 1, 1), layer_dilation=(1, 1, 1, 1),
                  layer_use_mp=(0, 0, 0, 0), layer_residual=(1, 1, 1, 1),
                  attn_layer='se', include_classifier=True, dims=2):
