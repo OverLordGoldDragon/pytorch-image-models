@@ -663,6 +663,7 @@ class ResNet(nn.Module):
 
         # Stem
         inplanes = stem_width
+        in_chans = in_shape[1]
         self.conv1 = self._conv(in_shape, in_chans, inplanes,
                                 kernel_size=stem_kernel_size, stride=stem_stride,
                                 bias=False, groups=stem_groups)
