@@ -291,7 +291,7 @@ def downsample_conv(in_shape, in_channels, out_channels, kernel_size, stride=1,
     return nn.Sequential(
         OrderedDict(
             [('ds-conv',
-              _conv(in_shape, in_channels, out_channels, kernel_size,
+              _conv(in_shape, out_channels, kernel_size,
                     stride=stride, dilation=first_dilation, bias=False,
                     #padding=p
                     )),
