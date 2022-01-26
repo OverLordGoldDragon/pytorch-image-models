@@ -11,12 +11,16 @@ from .adaptive_avgmax_pool import (SelectAdaptivePool1d,
 from .linear import Linear
 
 
-def _create_pool(num_features, num_classes, pool_type='avg', use_conv=False, dims=2):
-    flatten_in_pool = not use_conv  # flatten when we use a Linear layer after pooling
+def _create_pool(num_features, num_classes, pool_type='avg', use_conv=False,
+                 dims=2):
+    # flatten when we use a Linear layer after pooling
+    flatten_in_pool = not use_conv
     if not pool_type:
-        assert num_classes == 0 or use_conv,\
-            'Pooling can only be disabled if classifier is also removed or conv classifier is used'
-        flatten_in_pool = False  # disable flattening if pooling is pass-through (no pooling)
+        assert num_classes == 0 or use_conv, (
+            'Pooling can only be disabled if classifier is also removed or conv '
+            'classifier is used')
+        # disable flattening if pooling is pass-through (no pooling)
+        flatten_in_pool = False
     fn = (SelectAdaptivePool1d, SelectAdaptivePool2d, SelectAdaptivePool3d
           )[dims - 1]
     global_pool = fn(pool_type=pool_type, flatten=flatten_in_pool)
@@ -24,8 +28,10 @@ def _create_pool(num_features, num_classes, pool_type='avg', use_conv=False, dim
     return global_pool, num_pooled_features
 
 
-def _create_fc(num_features, num_classes, use_conv=False, dims=2):
-    if num_classes <= 0:
+def _create_fc(num_features, num_classes, use_conv=False, dims=2,
+               include_classifier=True):
+    assert not use_conv
+    if (num_classes <= 0 or not include_classifier):
         fc = nn.Identity()  # pass-through (no classifier)
     elif use_conv:
         fn = (None, nn.Conv2d, nn.Conv3d)[dims - 1]
@@ -54,11 +60,14 @@ def create_classifier(num_features, num_classes, pool_type='avg', use_conv=False
 class ClassifierHead(nn.Module):
     """Classifier head w/ configurable global pooling and dropout."""
 
-    def __init__(self, in_chs, num_classes, pool_type='avg', drop_rate=0., use_conv=False):
+    def __init__(self, in_chs, num_classes, pool_type='avg', drop_rate=0.,
+                 use_conv=False, include_classifier=True):
         super(ClassifierHead, self).__init__()
         self.drop_rate = drop_rate
-        self.global_pool, num_pooled_features = _create_pool(in_chs, num_classes, pool_type, use_conv=use_conv)
-        self.fc = _create_fc(num_pooled_features, num_classes, use_conv=use_conv)
+        self.global_pool, num_pooled_features = _create_pool(
+            in_chs, num_classes, pool_type, use_conv=use_conv)
+        self.fc = _create_fc(num_pooled_features, num_classes, use_conv=use_conv,
+                             include_classifier=include_classifier)
         self.flatten = nn.Flatten(1) if use_conv and pool_type else nn.Identity()
 
     def forward(self, x):

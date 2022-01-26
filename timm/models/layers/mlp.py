@@ -5,12 +5,14 @@ Hacked together by / Copyright 2020 Ross Wightman
 from torch import nn as nn
 
 from .helpers import to_2tuple
+from .custom import ConvPadNd
 
 
 class Mlp(nn.Module):
     """ MLP as used in Vision Transformer, MLP-Mixer and related networks
     """
-    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
+    def __init__(self, in_features, hidden_features=None, out_features=None,
+                 act_layer=nn.GELU, drop=0.):
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
@@ -100,15 +102,21 @@ class ConvMlp(nn.Module):
     """ MLP using 1x1 convs that keeps spatial dims
     """
     def __init__(
-            self, in_features, hidden_features=None, out_features=None, act_layer=nn.ReLU, norm_layer=None, drop=0.):
+            self, in_shape, hidden_features=None, out_features=None,
+            act_layer=nn.ReLU, norm_layer=None, drop=0.):
         super().__init__()
+        in_features = in_shape[1]
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
-        self.fc1 = nn.Conv2d(in_features, hidden_features, kernel_size=1, bias=True)
+        self.fc1 = ConvPadNd(in_shape, hidden_features, kernel_size=1,
+                             bias=True)
         self.norm = norm_layer(hidden_features) if norm_layer else nn.Identity()
         self.act = act_layer()
-        self.fc2 = nn.Conv2d(hidden_features, out_features, kernel_size=1, bias=True)
+        self.fc2 = ConvPadNd(self.fc1.out_shape, out_features, kernel_size=1,
+                             bias=True)
         self.drop = nn.Dropout(drop)
+
+        self.out_shape = self.fc2.out_shape
 
     def forward(self, x):
         x = self.fc1(x)

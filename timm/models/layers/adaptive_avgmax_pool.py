@@ -181,3 +181,9 @@ class SelectAdaptivePool3d(nn.Module):
         return self.__class__.__name__ + ' (' \
                + 'pool_type=' + self.pool_type \
                + ', flatten=' + str(self.flatten) + ')'
+
+
+def get_select_adaptive_pool(dims):
+    return {1: SelectAdaptivePool1d,
+            2: SelectAdaptivePool2d,
+            3: SelectAdaptivePool3d}[dims]

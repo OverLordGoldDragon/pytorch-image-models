@@ -20,6 +20,8 @@ from .helpers import build_model_with_cfg
 from .layers import (DropBlock2d, DropPath, AvgPool2dSame, AvgPool3dSame,
                      BlurPool2d, GroupNorm, create_attn, get_attn,
                      create_classifier)
+from .layers.custom import (MaxPoolNd, ConvPadNd, _set_layer_builders,
+                            _max_pool_maker)
 from .registry import register_model
 
  # model_registry will add each entrypoint fn to this
@@ -51,141 +53,10 @@ def _weight_init(m):
 
 
 
-def _max_pool_maker(dims):
-    mp_layer = getattr(nn, f'MaxPool{dims}d')
-    return lambda padding, in_shape=None, **kwargs: MaxPoolNd(
-        mp_layer, padding, in_shape, **kwargs)
-
-
-class MaxPoolNd(nn.Module):
-    def __init__(self, mp_layer, padding=0, in_shape=None, **kwargs):
-        super().__init__()
-        self.mp_layer = mp_layer(**kwargs)
-        self.padding = padding
-        self.in_shape = in_shape
-        self.kwargs = kwargs
-
-        if in_shape is not None:
-            self.out_shape = tuple(ConvPadNd.compute_out_shape(
-                in_shape, ks=kwargs.get('kernel_size', 1),
-                s=kwargs.get('stride', 1), d=1, pad=padding))
-        else:
-            self.out_shape = None
-
-    def forward(self, x):
-        if self.padding != 0:
-            x = F.pad(x, self.padding)
-        return self.mp_layer(x)
-
-
-def _set_layer_builders(self, dims):
-    assert dims in (1, 2, 3), dims
-    setattr(self, 'dims', dims)
-    # setattr(self, '_conv', getattr(nn, f'Conv{dims}d'))
-    setattr(self, '_norm', getattr(nn, f'BatchNorm{dims}d'))
-    setattr(self, 'mean', lambda x: x.mean(tuple(range(-dims, 0))[::-1],
-                                           keepdim=True))
-    self._max_pool = _max_pool_maker(dims)
-
-
-class ConvPadNd(nn.Module):
-    """If `stride=1`, implements 'same', else pads enough so that first
-    kernel op centers at first point of input (`ceil(kernel_size/2)` on
-    each side).
-    """
-    def __init__(self, in_shape, ch_in, ch_out, kernel_size=3, stride=1,
-                 groups=1, dilation=1, bias=False):
-        super().__init__()
-        self.in_shape = in_shape
-        self.ch_in = ch_in
-        self.ch_out = ch_out
-        self.kernel_size = kernel_size
-        self.stride = stride
-        self.groups = groups
-        self.bias = bias
-
-        self.dims = len(in_shape) - 2  # minus `batch_size`, `channels`
-        self.pad_shape = self.compute_pad_shape(in_shape, kernel_size, stride,
-                                                dilation)
-        self.out_shape = self.compute_out_shape(in_shape, kernel_size, stride,
-                                                dilation, self.pad_shape, ch_out)
-        self.do_pad = any(pad > 0 for pad in self.pad_shape)
-
-        self.conv = getattr(nn, f'Conv{self.dims}d')(
-            ch_in, ch_out,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=0,
-            dilation=dilation,
-            groups=groups,
-            bias=bias)
-
-    def forward(self, x):
-        if self.do_pad:
-            x = F.pad(x, self.pad_shape)
-        return self.conv(x)
-
-    @staticmethod
-    def compute_pad_shape(in_shape, ks, s, d):
-        dims, ks, s, d, shape_spatial = ConvPadNd._process_args(
-            in_shape, ks, s, d)
-
-        pad_shape = []
-        for i, L in enumerate(shape_spatial):
-            pad = ConvPadNd.compute_pad_amount(L, ks[i], s[i], d[i])
-            pad_shape += [pad//2, pad - pad//2]
-        pad_shape = pad_shape[::-1]  # `F.pad` specifies backwards
-        return pad_shape
-
-    @staticmethod
-    def compute_pad_amount(L, ks, s, d):
-        if 0:#s > 1:
-            pad = (math.ceil(ks / 2) if ks != 1 else
-                   0)
-        else:
-            pad = (math.ceil(L / s) - 1) * s + (ks - 1) * d + 1 - L
-        return int(max(pad, 0))
-
-    @staticmethod
-    def compute_out_shape(in_shape, ks, s, d, pad, ch_out=None):
-        pad = pad[::-1]  # since it was inverted
-        if s == 1:
-            out_shape = in_shape
-        else:
-            dims, ks, s, d, shape_spatial = ConvPadNd._process_args(
-                in_shape, ks, s, d)
-            out_shape = in_shape[:2]
-            for i, L in enumerate(shape_spatial):
-                pad_total = pad[2*i] + pad[2*i + 1]
-                out_shape += (ConvPadNd.compute_out_amount(
-                    L, ks[i], s[i], d[i], pad_total),)
-        out_shape = list(out_shape)
-        if ch_out is None:
-            ch_out = in_shape[1]  # ch_in
-        out_shape[1] = ch_out
-        return tuple(out_shape)
-
-    @staticmethod
-    def compute_out_amount(L, ks, s, d, pad_total):
-        return int(math.floor((L + pad_total - d * (ks - 1) - 1) / s + 1))
-
-    @staticmethod
-    def _process_args(in_shape, ks, s, d):
-        dims = len(in_shape) - 2
-        if isinstance(ks, int):
-            ks = dims * (ks,)
-        if isinstance(s, int):
-            s = dims * (s,)
-        if isinstance(d, int):
-            d = dims * (d,)
-        shape_spatial = in_shape[-dims:]
-        return dims, ks, s, d, shape_spatial
-
-
 class BasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, in_shape, inplanes, planes, stride=1, downsample=None,
+    def __init__(self, in_shape, planes, stride=1, downsample=None,
                  cardinality=1, base_width=64, reduce_first=1, dilation=1,
                  first_dilation=None, act_layer=nn.ReLU,
                  norm_layer=nn.BatchNorm2d, attn_layer=None, aa_layer=None,
@@ -224,7 +95,7 @@ class BasicBlock(nn.Module):
                         1)
 
         self.conv1 = self._conv(
-            conv1_in_shape, inplanes, first_planes, kernel_size=kernel_size,
+            conv1_in_shape, first_planes, kernel_size=kernel_size,
             stride=conv1_stride, #padding='same',
             dilation=first_dilation, groups=groups, bias=False)
         self.bn1 = norm_layer(first_planes)
@@ -233,7 +104,7 @@ class BasicBlock(nn.Module):
                            ) if use_aa else None
 
         self.conv2 = self._conv(
-            self.conv1.out_shape, first_planes, outplanes,
+            self.conv1.out_shape, outplanes,
             kernel_size=kernel_size, #padding='same',
             dilation=dilation, groups=groups, bias=False)
         self.bn2 = norm_layer(outplanes)
@@ -296,7 +167,7 @@ class BasicBlock(nn.Module):
 class Bottleneck(nn.Module):
     expansion = 4
 
-    def __init__(self, in_shape, inplanes, planes, stride=1, downsample=None,
+    def __init__(self, in_shape, planes, stride=1, downsample=None,
                  cardinality=1, base_width=64, reduce_first=1, dilation=1,
                  groups=1, first_dilation=None, act_layer=nn.ReLU,
                  norm_layer=None, attn_layer=None, aa_layer=None, drop_block=None,
@@ -335,20 +206,20 @@ class Bottleneck(nn.Module):
         conv2_stride = (stride if self._max_pool is None else
                         1)
 
-        self.conv1 = self._conv(conv1_in_shape, inplanes, first_planes,
-                                kernel_size=1, bias=False)
+        self.conv1 = self._conv(conv1_in_shape, first_planes, kernel_size=1,
+                                bias=False)
         self.bn1 = norm_layer(first_planes)
         self.act1 = act_layer(inplace=True)
 
         self.conv2 = self._conv(
-            self.conv1.out_shape, first_planes, width, kernel_size=kernel_size,
+            self.conv1.out_shape, width, kernel_size=kernel_size,
             stride=conv2_stride, dilation=first_dilation, groups=groups,
             bias=False)
         self.bn2 = norm_layer(width)
         self.act2 = act_layer(inplace=True)
         self.aa = aa_layer(channels=width, stride=stride) if use_aa else None
 
-        self.conv3 = self._conv(self.conv2.out_shape, width, outplanes,
+        self.conv3 = self._conv(self.conv2.out_shape, outplanes,
                                 kernel_size=1, bias=False)
         self.bn3 = norm_layer(outplanes)
 
@@ -458,6 +329,7 @@ def downsample_avg(
                            count_include_pad=False)
 
     _conv = (nn.Conv1d, nn.Conv2d, nn.Conv3d)[dims - 1]
+    1/0
     return nn.Sequential(*[
         pool,
         _conv(in_channels, out_channels, 1, stride=1, padding=0, bias=False),
@@ -499,7 +371,7 @@ def make_blocks(
         if s != 1 or inplanes != planes * block_fn.expansion:
             ds_s = 1 if use_mp else s
             down_kwargs = dict(
-                in_shape=in_shape, in_channels=inplanes,
+                in_shape=in_shape, in_channels=inplanes,  # TODO in_shape
                 out_channels=planes * block_fn.expansion,
                 kernel_size=down_kernel_size, stride=ds_s, dilation=dilation,
                 first_dilation=prev_dilation, norm_layer=kwargs.get('norm_layer'),
@@ -526,7 +398,7 @@ def make_blocks(
             s = s if block_idx == 0 else 1
 
             blocks.append(block_fn(
-                in_shape, inplanes, planes, s, downsample,
+                in_shape, planes, s, downsample,
                 first_dilation=prev_dilation, drop_path=None,
                 **block_kwargs))
             inplanes = planes * block_fn.expansion
@@ -625,7 +497,7 @@ class ResNet(nn.Module):
         Global pooling type. One of 'avg', 'max', 'avgmax', 'catavgmax'
     """
 
-    def __init__(self, block, layers, in_shape, num_classes=1000, in_chans=3,
+    def __init__(self, block, layers, in_shape, num_classes=1000,
                  cardinality=1, base_width=64, stem_width=64, stem_kernel_size=7,
                  stem_groups=1, replace_stem_pool=False,
                  block_reduce_first=1, down_kernel_size=1, avg_down=False,
@@ -639,7 +511,7 @@ class ResNet(nn.Module):
                  layer_kernel_sizes=(3, 3, 3, 3),
                  stride=(1, 1, 1, 1), layer_dilation=(1, 1, 1, 1),
                  layer_use_mp=(0, 0, 0, 0), layer_residual=(1, 1, 1, 1),
-                 attn_layer='se', include_classifier=True, dims=2):
+                 attn_layer='se', include_classifier=True):
         block_args = block_args or dict()
         self.layers = layers
         self.in_shape = in_shape
@@ -649,6 +521,8 @@ class ResNet(nn.Module):
         self.in_spatial_dropout = in_spatial_dropout
         self.stem_pool = stem_pool
         super(ResNet, self).__init__()
+
+        dims = len(in_shape) - 2
         _set_layer_builders(self, dims)
         self._conv = ConvPadNd
         norm_layer = norm_layer or self._norm
@@ -663,8 +537,7 @@ class ResNet(nn.Module):
 
         # Stem
         inplanes = stem_width
-        in_chans = in_shape[1]
-        self.conv1 = self._conv(in_shape, in_chans, inplanes,
+        self.conv1 = self._conv(in_shape, inplanes,
                                 kernel_size=stem_kernel_size, stride=stem_stride,
                                 bias=False, groups=stem_groups)
         self.bn1 = norm_layer(inplanes)
