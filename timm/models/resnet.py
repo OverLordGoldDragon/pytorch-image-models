@@ -381,7 +381,7 @@ def make_blocks(
 
         if stage_idx < len(drop_block_rate) and drop_block_rate[stage_idx] != 0:
             _get = lambda ls: ls[stage_idx] if stage_idx < len(ls) else ls[-1]
-            drop_block = DropBlock2d(drop_block_rate[stage_idx],
+            drop_block = DropBlock2d(drop_block_rate[stage_idx], fast=False,
                                      block_size=_get(drop_block_size),
                                      gamma_scale=_get(drop_block_gamma_scale))
         else:

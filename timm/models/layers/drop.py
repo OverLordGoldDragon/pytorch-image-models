@@ -54,11 +54,15 @@ def drop_block_2d(
     runs with success, but needs further validation and possibly
     optimization for lower runtime impact.
     """
-    B, C, H, W = x.shape
+    B, C, H, W = [int(g) for g in x.shape]
     if H > W:
         block_size = (int(H / W * block_size), block_size)
     else:
         block_size = (block_size, int(W / H) * block_size)
+    if block_size[0] > H or block_size[1] > W:
+        raise Exception("block too big fam\n{} -- {}, {}".format(
+            str(block_size), H, W))
+
     total_size = W * H
     clipped_block_size = (min(block_size[0], W),
                           min(block_size[1], H))
@@ -87,11 +91,14 @@ def drop_block_2d(
     block_mask = ((2 - gamma - valid_block + uniform_noise) >= 1).to(dtype=x.dtype)
     pad = compute_same_pad((H, W), clipped_block_size, s=1)
     block_mask = F.pad(block_mask, pad)
-    block_mask = -F.max_pool2d(
-        -block_mask,
-        kernel_size=clipped_block_size,  # block_size,
-        stride=1,
-        padding=0)
+    try:
+        block_mask = -F.max_pool2d(
+            -block_mask,
+            kernel_size=clipped_block_size,  # block_size,
+            stride=1,
+            padding=0)
+    except:
+        1/0
 
     if with_noise:
         normal_noise = torch.randn((1, C, H, W), dtype=x.dtype, device=x.device
@@ -121,6 +128,7 @@ def drop_block_fast_2d(
     block mask at edges.
     """
     B, C, H, W = x.shape
+    W, H = int(W), int(H)
     total_size = W * H
     clipped_block_size = min(block_size, min(W, H))
     gamma = gamma_scale * drop_prob * total_size / clipped_block_size ** 2 / (
