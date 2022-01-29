@@ -283,7 +283,16 @@ def downsample_conv(in_shape, in_channels, out_channels, kernel_size, stride=1,
     norm_layer = norm_layer or (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d
                                 )[dims - 1]
     kernel_size = 1 if stride == 1 and dilation == 1 else kernel_size
-    first_dilation = (first_dilation or dilation) if kernel_size > 1 else 1
+    if not isinstance(kernel_size, tuple):
+        kernel_size = (kernel_size,) * dims
+    if not isinstance(dilation, tuple):
+        dilation = (dilation,) * dims
+
+    first_dilation = [[]] * dims
+    for i, ks in enumerate(kernel_size):
+        first_dilation[i] = (first_dilation[i] or dilation[i]) if ks > 1 else 1
+    first_dilation = tuple(first_dilation)
+
     # p = get_padding(kernel_size, stride, first_dilation)
 
     # _conv = (nn.Conv1d, nn.Conv2d, nn.Conv3d)[dims - 1]
@@ -346,7 +355,7 @@ def downsample_avg(
 
 def make_blocks(
         block_fn, channels, block_repeats, inplanes, in_shape, reduce_first=1,
-        down_kernel_size=1, avg_down=False,
+        down_kernel_size=(1, 1, 1), avg_down=False,
         drop_path_rate=0., layer_groups=(1, 1, 1), layer_kernel_sizes=(3, 3, 3),
         layer_stride=(1, 1, 1), layer_dilation=(1, 1, 1), layer_use_mp=(0, 0, 0),
         layer_residual=(1, 1, 1),
@@ -374,9 +383,9 @@ def make_blocks(
             down_kwargs = dict(
                 in_shape=in_shape, in_channels=inplanes,  # TODO in_shape
                 out_channels=planes * block_fn.expansion,
-                kernel_size=down_kernel_size, stride=ds_s, dilation=dilation,
-                first_dilation=prev_dilation, norm_layer=kwargs.get('norm_layer'),
-                dims=dims)
+                kernel_size=down_kernel_size[stage_idx], stride=ds_s,
+                dilation=dilation, first_dilation=prev_dilation,
+                norm_layer=kwargs.get('norm_layer'), dims=dims)
             downsample = (downsample_avg(**down_kwargs) if avg_down else
                           downsample_conv(**down_kwargs))
 
@@ -502,10 +511,11 @@ class ResNet(nn.Module):
     def __init__(self, block, layers, in_shape, num_classes=1000,
                  cardinality=1, base_width=64, stem_width=64, stem_kernel_size=7,
                  stem_groups=1, replace_stem_pool=False,
-                 block_reduce_first=1, down_kernel_size=1, avg_down=False,
-                 act_layer=nn.ReLU, norm_layer=None, aa_layer=None,
-                 in_drop_rate=0., out_drop_rate=0., drop_path_rate=0.,
-                 drop_block_rate=(0, 0, 0, 0), drop_block_size=(3, 3, 3, 3),
+                 block_reduce_first=1, down_kernel_size=(1, 1, 1, 1),
+                 avg_down=False, act_layer=nn.ReLU, norm_layer=None,
+                 aa_layer=None, in_drop_rate=0., out_drop_rate=0.,
+                 drop_path_rate=0., drop_block_rate=(0, 0, 0, 0),
+                 drop_block_size=(3, 3, 3, 3),
                  drop_block_gamma_scale=(1, 1, 1, 1),
                  drop_block_fast=(1, 1, 1, 1), in_spatial_dropout=True,
                  global_pool='avg', zero_init_last_bn=True, block_args=None,
