@@ -353,6 +353,7 @@ def make_blocks(
         drop_block_rate=(0, 0, 0),
         drop_block_size=(3, 3, 3),
         drop_block_gamma_scale=(1, 1, 1),
+        drop_block_fast=(1, 1, 1),
         attn_layer=None, dims=2, **kwargs):
     stages = []
     feature_info = []
@@ -381,7 +382,8 @@ def make_blocks(
 
         if stage_idx < len(drop_block_rate) and drop_block_rate[stage_idx] != 0:
             _get = lambda ls: ls[stage_idx] if stage_idx < len(ls) else ls[-1]
-            drop_block = DropBlock2d(drop_block_rate[stage_idx], fast=False,
+            drop_block = DropBlock2d(drop_block_rate[stage_idx],
+                                     fast=drop_block_fast[stage_idx],
                                      block_size=_get(drop_block_size),
                                      gamma_scale=_get(drop_block_gamma_scale))
         else:
@@ -504,7 +506,8 @@ class ResNet(nn.Module):
                  act_layer=nn.ReLU, norm_layer=None, aa_layer=None,
                  in_drop_rate=0., out_drop_rate=0., drop_path_rate=0.,
                  drop_block_rate=(0, 0, 0, 0), drop_block_size=(3, 3, 3, 3),
-                 drop_block_gamma_scale=(1, 1, 1, 1), in_spatial_dropout=True,
+                 drop_block_gamma_scale=(1, 1, 1, 1),
+                 drop_block_fast=(1, 1, 1, 1), in_spatial_dropout=True,
                  global_pool='avg', zero_init_last_bn=True, block_args=None,
                  channels=(64, 128, 256, 512), stem_stride=2, stem_pool=2,
                  stem_pool_kernel_size=3, layer_groups=(1, 1, 1, 1),
@@ -586,7 +589,7 @@ class ResNet(nn.Module):
             act_layer=act_layer, norm_layer=norm_layer, aa_layer=aa_layer,
             drop_block_rate=drop_block_rate, drop_block_size=drop_block_size,
             drop_block_gamma_scale=drop_block_gamma_scale,
-            drop_path_rate=drop_path_rate,
+            drop_path_rate=drop_path_rate, drop_block_fast=drop_block_fast,
             layer_groups=layer_groups, layer_kernel_sizes=layer_kernel_sizes,
             layer_stride=stride, layer_dilation=layer_dilation,
             layer_use_mp=layer_use_mp, layer_residual=layer_residual,
