@@ -113,8 +113,10 @@ class ConvNeXtStage(nn.Module):
             cl_norm_layer=None):
         super().__init__()
 
-        if not isinstance(stride, tuple):
-            stride = (stride,) * (len(in_shape) - 2)
+        if not isinstance(stride,      (tuple, list)):
+            stride      = (stride,) *      (len(in_shape) - 2)
+        if not isinstance(kernel_size, (tuple, list)):
+            kernel_size = (kernel_size,) * (len(in_shape) - 2)
 
         in_chs = in_shape[1]
         if in_chs != out_chs or any(s > 1 for s in stride):
@@ -222,6 +224,7 @@ class ConvNeXt(nn.Module):
         for i in range(len(channels)):
             # FIXME support dilation / output_stride
             out_chs = channels[i]
+
             stages.append(ConvNeXtStage(
                 stage_in_shape, out_chs, kernel_size=layer_kernel_sizes[i],
                 stride=stride[i], depth=layers[i], dp_rates=dp_rates[i],
