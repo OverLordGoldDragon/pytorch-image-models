@@ -672,9 +672,10 @@ class ResNet(nn.Module):
         x = self.layer1(x)
         self.ashape(x, self.layer1)
         self.save(x, 4)
-        x = self.layer2(x)
-        self.ashape(x, self.layer2)
-        self.save(x, 5)
+        if self.n_layers >= 2:
+            x = self.layer2(x)
+            self.ashape(x, self.layer2)
+            self.save(x, 5)
 
         if self.n_layers >= 3:
             x = self.layer3(x)
