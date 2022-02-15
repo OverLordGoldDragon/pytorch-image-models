@@ -24,7 +24,7 @@ from .helpers import named_apply, build_model_with_cfg
 from .layers import (trunc_normal_, ClassifierHead, DropPath,
                      ConvMlp, Mlp, get_select_adaptive_pool)
 from .layers.custom import (MaxPoolNd, ConvPadNd, LayerNormNd,
-                            _set_layer_builders, _max_pool_maker, ashape)
+                            _set_layer_builders, ashape)
 from .registry import register_model
 
 
@@ -214,7 +214,6 @@ class ConvNeXt(nn.Module):
         )
         self.stem.out_shape = self.stem[0].out_shape
 
-        self.stages = nn.Sequential()
         dp_rates = [x.tolist() for x in torch.linspace(
             0, drop_path_rate, sum(layers)).split(layers)]
         prev_chs = channels[0]

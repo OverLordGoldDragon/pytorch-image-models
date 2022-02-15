@@ -9,6 +9,7 @@ from .adaptive_avgmax_pool import (SelectAdaptivePool1d,
                                    SelectAdaptivePool2d,
                                    SelectAdaptivePool3d)
 from .linear import Linear
+from .custom import GlobalAveragePooling
 
 
 def _create_pool(num_features, num_classes, pool_type='avg', use_conv=False,
@@ -21,10 +22,14 @@ def _create_pool(num_features, num_classes, pool_type='avg', use_conv=False,
             'classifier is used')
         # disable flattening if pooling is pass-through (no pooling)
         flatten_in_pool = False
-    fn = (SelectAdaptivePool1d, SelectAdaptivePool2d, SelectAdaptivePool3d
-          )[dims - 1]
-    global_pool = fn(pool_type=pool_type, flatten=flatten_in_pool)
-    num_pooled_features = num_features * global_pool.feat_mult()
+    if pool_type == 'avg':
+        global_pool = GlobalAveragePooling(flatten_in_pool)
+        num_pooled_features = num_features
+    else:
+        fn = (SelectAdaptivePool1d, SelectAdaptivePool2d, SelectAdaptivePool3d
+              )[dims - 1]
+        global_pool = fn(pool_type=pool_type, flatten=flatten_in_pool)
+        num_pooled_features = num_features * global_pool.feat_mult()
     return global_pool, num_pooled_features
 
 

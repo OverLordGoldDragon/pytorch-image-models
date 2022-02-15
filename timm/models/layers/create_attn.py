@@ -83,10 +83,15 @@ def get_attn(attn_type):
     return module_cls
 
 
-def create_attn(attn_type, channels, **kwargs):
+def create_attn(attn_type, channels=None, **kwargs):
     module_cls = get_attn(attn_type)
     if module_cls is not None:
         # NOTE: it's expected the first (positional) argument of all
         # attention layers is the # input channels
-        return module_cls(channels, **kwargs)
+        if attn_type != 'se':
+            return module_cls(channels, **kwargs)
+        else:
+            if 'se_ratio' in kwargs:
+                kwargs['rd_ratio'] = kwargs.pop('se_ratio')
+            return module_cls(**kwargs)
     return None

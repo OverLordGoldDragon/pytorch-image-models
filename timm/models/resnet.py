@@ -20,8 +20,8 @@ from .helpers import build_model_with_cfg
 from .layers import (DropBlock2d, DropPath, AvgPool2dSame, AvgPool3dSame,
                      BlurPool2d, GroupNorm, create_attn, get_attn,
                      create_classifier)
-from .layers.custom import (MaxPoolNd, ConvPadNd, _set_layer_builders,
-                            _max_pool_maker)
+from .layers.custom import (MaxPoolNd, ConvPadNd, BatchNormNd,
+                            _set_layer_builders, select_conv)
 from .registry import register_model
 
  # model_registry will add each entrypoint fn to this
@@ -61,10 +61,11 @@ class BasicBlock(nn.Module):
                  first_dilation=None, act_layer=nn.ReLU,
                  norm_layer=nn.BatchNorm2d, attn_layer=None, aa_layer=None,
                  drop_block=None, drop_path=None, groups=1, kernel_size=3,
-                 use_mp=False, residual=True, dims=2):
+                 use_mp=False, residual=True, se_ratio=16):
         super(BasicBlock, self).__init__()
+        dims = len(in_shape) - 2
         _set_layer_builders(self, dims)
-        self._conv = ConvPadNd
+        self._conv = select_conv
         self.in_shape = in_shape
         self.residual = residual
 
@@ -80,12 +81,7 @@ class BasicBlock(nn.Module):
 
         if use_mp and (stride != 1 or (isinstance(stride, tuple) and
                                        not all(s == 1 for s in stride))):
-            mp_pad = tuple(ConvPadNd.compute_pad_shape(
-                in_shape, ks=stride, s=stride, d=1)
-                )
-            self._max_pool = _max_pool_maker(dims)(
-                padding=mp_pad, in_shape=self.in_shape,
-                stride=stride, kernel_size=stride)
+            self._max_pool = MaxPoolNd(in_shape, stride, stride)
         else:
             self._max_pool = None
 
@@ -95,8 +91,8 @@ class BasicBlock(nn.Module):
                         1)
 
         self.conv1 = self._conv(
-            conv1_in_shape, first_planes, kernel_size=kernel_size,
-            stride=conv1_stride, #padding='same',
+            conv1_in_shape, first_planes,
+            kernel_size=kernel_size, stride=conv1_stride,
             dilation=first_dilation, groups=groups, bias=False)
         self.bn1 = norm_layer(first_planes)
         self.act1 = act_layer(inplace=True)
@@ -105,11 +101,12 @@ class BasicBlock(nn.Module):
 
         self.conv2 = self._conv(
             self.conv1.out_shape, outplanes,
-            kernel_size=kernel_size, #padding='same',
+            kernel_size=kernel_size,
             dilation=dilation, groups=groups, bias=False)
         self.bn2 = norm_layer(outplanes)
 
-        self.se = create_attn(attn_layer, outplanes, dims=dims)
+        self.se = create_attn(attn_layer, in_shape=self.conv2.out_shape,
+                              se_ratio=se_ratio)
 
         self.act2 = act_layer(inplace=True)
 
@@ -172,13 +169,14 @@ class Bottleneck(nn.Module):
                  groups=1, first_dilation=None, act_layer=nn.ReLU,
                  norm_layer=None, attn_layer=None, aa_layer=None, drop_block=None,
                  drop_path=None, kernel_size=3, use_mp=False, residual=True,
-                 dims=2):
+                 se_ratio=16):
         super(Bottleneck, self).__init__()
+        dims = len(in_shape) - 2
         _set_layer_builders(self, dims)
-        self._conv = ConvPadNd
+        self._conv = select_conv
         self.in_shape = in_shape
         self.residual = residual
-        norm_layer = norm_layer or self._norm
+        norm_layer = norm_layer or BatchNormNd
 
         width = int(math.floor(planes * (base_width / 64)) * cardinality)
         first_planes = width // reduce_first
@@ -192,12 +190,7 @@ class Bottleneck(nn.Module):
 
         if use_mp and (stride != 1 or (isinstance(stride, tuple) and
                                        not all(s == 1 for s in stride))):
-            mp_pad = tuple(ConvPadNd.compute_pad_shape(
-                in_shape, ks=stride, s=stride, d=1)
-                )
-            self._max_pool = _max_pool_maker(dims)(
-                padding=mp_pad, in_shape=self.in_shape,
-                stride=stride, kernel_size=stride)
+            self._max_pool = MaxPoolNd(in_shape, stride, stride)
         else:
             self._max_pool = None
 
@@ -223,7 +216,8 @@ class Bottleneck(nn.Module):
                                 kernel_size=1, bias=False)
         self.bn3 = norm_layer(outplanes)
 
-        self.se = create_attn(attn_layer, outplanes, dims=dims)
+        self.se = create_attn(attn_layer, in_shape=self.conv3.out_shape,
+                              se_ratio=se_ratio)
 
         self.act3 = act_layer(inplace=True)
         self.downsample = downsample
@@ -279,7 +273,8 @@ from collections import OrderedDict
 
 
 def downsample_conv(in_shape, in_channels, out_channels, kernel_size, stride=1,
-                    dilation=1, first_dilation=None, norm_layer=None, dims=2):
+                    dilation=1, first_dilation=None, norm_layer=None):
+    dims = len(in_shape) - 2
     norm_layer = norm_layer or (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d
                                 )[dims - 1]
     kernel_size = 1 if stride == 1 and dilation == 1 else kernel_size
@@ -296,7 +291,7 @@ def downsample_conv(in_shape, in_channels, out_channels, kernel_size, stride=1,
     # p = get_padding(kernel_size, stride, first_dilation)
 
     # _conv = (nn.Conv1d, nn.Conv2d, nn.Conv3d)[dims - 1]
-    _conv = ConvPadNd
+    _conv = select_conv
     return nn.Sequential(
         OrderedDict(
             [('ds-conv',
@@ -317,9 +312,10 @@ def downsample_conv(in_shape, in_channels, out_channels, kernel_size, stride=1,
     # ])
 
 
-def downsample_avg(
-        in_channels, out_channels, kernel_size, stride=1, dilation=1,
-        first_dilation=None, norm_layer=None, dims=2):
+def downsample_avg(in_channels, out_channels, kernel_size, stride=1, dilation=1,
+                   first_dilation=None, norm_layer=None):
+    1/0
+    dims = 0
     norm_layer = norm_layer or (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d
                                 )[dims - 1]
     avg_stride = stride if dilation == 1 else 1
@@ -358,12 +354,12 @@ def make_blocks(
         down_kernel_size=(1, 1, 1), avg_down=False,
         drop_path_rate=0., layer_groups=(1, 1, 1), layer_kernel_sizes=(3, 3, 3),
         layer_stride=(1, 1, 1), layer_dilation=(1, 1, 1), layer_use_mp=(0, 0, 0),
-        layer_residual=(1, 1, 1),
+        layer_residual=(1, 1, 1), layer_se_ratio=(16, 16, 16),
         drop_block_rate=(0, 0, 0),
         drop_block_size=(3, 3, 3),
         drop_block_gamma_scale=(1, 1, 1),
         drop_block_fast=(1, 1, 1),
-        attn_layer=None, dims=2, **kwargs):
+        attn_layer=None, **kwargs):
     stages = []
     feature_info = []
     net_num_blocks = sum(block_repeats)
@@ -385,7 +381,7 @@ def make_blocks(
                 out_channels=planes * block_fn.expansion,
                 kernel_size=down_kernel_size[stage_idx], stride=ds_s,
                 dilation=dilation, first_dilation=prev_dilation,
-                norm_layer=kwargs.get('norm_layer'), dims=dims)
+                norm_layer=kwargs.get('norm_layer'))
             downsample = (downsample_avg(**down_kwargs) if avg_down else
                           downsample_conv(**down_kwargs))
 
@@ -401,8 +397,9 @@ def make_blocks(
                             groups=layer_groups[stage_idx],
                             kernel_size=layer_kernel_sizes[stage_idx],
                             use_mp=use_mp, residual=layer_residual[stage_idx],
+                            se_ratio=layer_se_ratio[stage_idx],
                             attn_layer=attn_layer, drop_block=drop_block,
-                            dims=dims, **kwargs)
+                            **kwargs)
         blocks = []
         for block_idx in range(num_blocks):
             downsample = downsample if block_idx == 0 else None
@@ -524,21 +521,32 @@ class ResNet(nn.Module):
                  layer_kernel_sizes=(3, 3, 3, 3),
                  stride=(1, 1, 1, 1), layer_dilation=(1, 1, 1, 1),
                  layer_use_mp=(0, 0, 0, 0), layer_residual=(1, 1, 1, 1),
-                 attn_layer='se', include_classifier=True):
+                 layer_se_ratio=(16, 16, 16, 16), layer_split_idx=None,
+                 split_siamese=True, fuse_op=None, attn_layer='se',
+                 fc_post_gap=None, include_classifier=True):
         block_args = block_args or dict()
         self.layers = layers
-        self.in_shape = in_shape
         self.num_classes = num_classes
         self.in_drop_rate = in_drop_rate
         self.out_drop_rate = out_drop_rate
         self.in_spatial_dropout = in_spatial_dropout
-        self.stem_pool = stem_pool
+        self.fc_post_gap = fc_post_gap
+        self.stem_pool = (stem_pool if isinstance(stem_pool, tuple) else
+                          (stem_pool,))
+        self.use_stem_pool = bool(not all(p == 1 for p in self.stem_pool))
+
+        if layer_split_idx is not None:
+            assert layer_split_idx >= 0, layer_split_idx
+        self.layer_split_idx = layer_split_idx
+        self.split_siamese = split_siamese
+        self.in_shape = in_shape
+
         super(ResNet, self).__init__()
 
         dims = len(in_shape) - 2
         _set_layer_builders(self, dims)
-        self._conv = ConvPadNd
-        norm_layer = norm_layer or self._norm
+        self._conv = select_conv
+        norm_layer = BatchNormNd
 
         self.sanity_checks = True
         self.n_sanity_checked = 0
@@ -550,60 +558,53 @@ class ResNet(nn.Module):
 
         # Stem
         inplanes = stem_width
-        self.conv1 = self._conv(in_shape, inplanes,
-                                kernel_size=stem_kernel_size, stride=stem_stride,
-                                bias=False, groups=stem_groups)
-        self.bn1 = norm_layer(inplanes)
-        self.act1 = act_layer(inplace=True)
-        self.feature_info = [dict(num_chs=inplanes, reduction=2, module='act1')]
+        def make_stem():
+            conv1 = self._conv(in_shape, inplanes, kernel_size=stem_kernel_size,
+                               stride=stem_stride, bias=False,
+                               groups=stem_groups)
+            bn1 = norm_layer(inplanes)
+            act1 = act_layer(inplace=True)
+            feature_info = [dict(num_chs=inplanes, reduction=2, module='act1')]
 
-        # Stem Pooling
-        if replace_stem_pool:
-            raise NotImplementedError
-        else:
-            mp_pad_orig = tuple(ConvPadNd.compute_pad_shape(
-                self.conv1.out_shape, ks=stem_pool_kernel_size, s=stem_pool, d=1)
-                )
-            mp_pad = mp_pad_orig#[::-1]
-            # assert mp_pad[0] == mp_pad[1], mp_pad
-            # if len(mp_pad) > 2:
-            #     assert mp_pad[2] == mp_pad[3], mp_pad
-            # if len(mp_pad) > 4:
-            #     assert mp_pad[4] == mp_pad[5], mp_pad
-            # if len(mp_pad) == 2:
-            #     mp_pad = mp_pad[0]
-            # elif len(mp_pad) == 4:
-            #     mp_pad = (mp_pad[0], mp_pad[2])
-            # else:
-            #     mp_pad = (mp_pad[0], mp_pad[2], mp_pad[4])
-
-            if aa_layer is not None:
+            # Stem Pooling
+            if replace_stem_pool:
                 raise NotImplementedError
-            else:
-                self.maxpool = self._max_pool(kernel_size=stem_pool_kernel_size,
-                                              stride=stem_pool, padding=mp_pad)
+            elif self.use_stem_pool:
+                if aa_layer is not None:
+                    raise NotImplementedError
+                else:
+                    maxpool = MaxPoolNd(conv1.out_shape, stem_pool_kernel_size,
+                                        stem_pool)
 
-        if stem_pool == 1:
-            layer1_in_shape = self.conv1.out_shape
-        else:
-            layer1_in_shape = tuple(ConvPadNd.compute_out_shape(
-                self.conv1.out_shape, ks=stem_pool_kernel_size,
-                s=stem_pool, d=1, pad=mp_pad_orig))
+            if self.use_stem_pool:
+                layer1_in_shape = tuple(maxpool.out_shape)
+                stem = nn.Sequential(conv1, bn1, act1, maxpool)
+            else:
+                layer1_in_shape = tuple(conv1.out_shape)
+                stem = nn.Sequential(conv1, bn1, act1)
+            return stem, feature_info, layer1_in_shape
+
+        self.stem, self.feature_info, layer1_in_shape = make_stem()
 
         # Feature Blocks
-        stage_modules, stage_feature_info = make_blocks(
-            block, channels, layers, inplanes, in_shape=layer1_in_shape,
-            cardinality=cardinality, base_width=base_width,
-            reduce_first=block_reduce_first,
-            avg_down=avg_down, down_kernel_size=down_kernel_size,
-            act_layer=act_layer, norm_layer=norm_layer, aa_layer=aa_layer,
-            drop_block_rate=drop_block_rate, drop_block_size=drop_block_size,
-            drop_block_gamma_scale=drop_block_gamma_scale,
-            drop_path_rate=drop_path_rate, drop_block_fast=drop_block_fast,
-            layer_groups=layer_groups, layer_kernel_sizes=layer_kernel_sizes,
-            layer_stride=stride, layer_dilation=layer_dilation,
-            layer_use_mp=layer_use_mp, layer_residual=layer_residual,
-            attn_layer=attn_layer, dims=dims, **block_args)
+        def do_make_blocks():
+            stage_modules, stage_feature_info = make_blocks(
+                block, channels, layers, inplanes, in_shape=layer1_in_shape,
+                cardinality=cardinality, base_width=base_width,
+                reduce_first=block_reduce_first,
+                avg_down=avg_down, down_kernel_size=down_kernel_size,
+                act_layer=act_layer, norm_layer=norm_layer, aa_layer=aa_layer,
+                drop_block_rate=drop_block_rate, drop_block_size=drop_block_size,
+                drop_block_gamma_scale=drop_block_gamma_scale,
+                drop_path_rate=drop_path_rate, drop_block_fast=drop_block_fast,
+                layer_groups=layer_groups, layer_kernel_sizes=layer_kernel_sizes,
+                layer_stride=stride, layer_dilation=layer_dilation,
+                layer_use_mp=layer_use_mp, layer_residual=layer_residual,
+                layer_se_ratio=layer_se_ratio, attn_layer=attn_layer,
+                **block_args)
+            return stage_modules, stage_feature_info
+
+        stage_modules, stage_feature_info = do_make_blocks()
         for stage in stage_modules:
             self.add_module(*stage)  # layer1, layer2, etc
         self.feature_info.extend(stage_feature_info)
@@ -614,7 +615,54 @@ class ResNet(nn.Module):
             self.num_features, self.num_classes, pool_type=global_pool,
             include_classifier=include_classifier, dims=dims)
 
+        # non-classifier dense
+        if self.fc_post_gap is not None:
+            self.fc_post_gap = nn.Sequential(
+                nn.Linear(self.num_features, self.fc_post_gap, bias=False),
+                nn.BatchNorm1d(self.fc_post_gap),
+                nn.ReLU(inplace=True)
+            )
+
+        # Fuse op
+        self.fuse_op = fuse_op
+        if fuse_op is not None:
+            fo = {'sum':  torch.add,
+                  'diff': torch.sub,
+                  None:   None}[fuse_op.split('-')[0]]
+            if 'bn' in fuse_op:
+                l = getattr(self, f'layer{layer_split_idx}')[-1]
+                self._fo_norm = norm_layer(l.out_shape[1])
+                self._fuse_op = lambda x0, x1: self._fo_norm(fo(x0, x1))
+            else:
+                self._fuse_op = fo
+
         self.init_weights(zero_init_last_bn=zero_init_last_bn)
+
+        # make duplicates & init weights same as original
+        if layer_split_idx is not None and not split_siamese:
+            stage_modules, stage_feature_info = do_make_blocks()
+            for i, stage in enumerate(stage_modules):
+                if i > layer_split_idx:
+                    break
+                name, module = stage
+                name += '_dual'
+                self.add_module(name, module)
+            self.add_module('stem_dual', make_stem()[0])
+
+            names_orig, modules_orig = [], []
+            for n, m in self.named_modules():
+                if not n.split('.')[0].endswith('_dual') and hasattr(m, 'weight'):
+                    names_orig.append(n)
+                    modules_orig.append(m)
+
+            for n, m in self.named_modules():
+                if n.split('.')[0].endswith('_dual') and hasattr(m, 'weight'):
+                    no = n.replace('_dual', '')
+                    mo = modules_orig[names_orig.index(no)]
+                    with torch.no_grad():
+                        m.weight.set_(mo.weight)
+                        if m.bias is not None:
+                            m.bias.set_(mo.bias)
 
     def init_weights(self, zero_init_last_bn=True):
         for n, m in self.named_modules():
@@ -657,65 +705,94 @@ class ResNet(nn.Module):
             if self.n_sanity_checked >= self.n_sanity_checks:
                 self.sanity_checks = False
 
-    def forward_features(self, x):
-        x = self.conv1(x)
-        self.ashape(x, self.conv1)
-        self.save(x, 0)
-        x = self.bn1(x)
-        self.save(x, 1)
-        x = self.act1(x)
-        self.save(x, 2)
-        if self.stem_pool != 1:
-            x = self.maxpool(x)
-        self.save(x, 3)
+    def split_cond(self, second_half, current_idx):
+        return (
+            # always run
+            (second_half is None)  or
+            # second half
+            (second_half and self.layer_split_idx >= current_idx) or
+            # first half
+            (not second_half and self.layer_split_idx < current_idx)
+        )
 
-        x = self.layer1(x)
-        self.ashape(x, self.layer1)
-        self.save(x, 4)
-        if self.n_layers >= 2:
-            x = self.layer2(x)
+    def forward_features(self, x, second_half=None, first_net=True):
+        if not second_half:
+            x = (self.stem(x) if first_net else
+                 self.stem_dual(x))
+            self.save(x, 3)
+
+            x = (self.layer1(x) if first_net else
+                 self.layer1_dual(x))
+            self.ashape(x, self.layer1)
+            self.save(x, 4)
+
+        if self.n_layers >= 2 and self.split_cond(second_half, 1):
+            x = (self.layer2(x) if first_net else
+                 self.layer2_dual(x))
             self.ashape(x, self.layer2)
             self.save(x, 5)
 
-        if self.n_layers >= 3:
-            x = self.layer3(x)
+        if self.n_layers >= 3 and self.split_cond(second_half, 2):
+            x = (self.layer3(x) if first_net else
+                 self.layer3_dual(x))
             self.ashape(x, self.layer3)
             self.save(x, 6)
 
-        if self.n_layers >= 4:
-            x = self.layer4(x)
+        if self.n_layers >= 4 and self.split_cond(second_half, 3):
+            x = (self.layer4(x) if first_net else
+                 self.layer4_dual(x))
             self.ashape(x, self.layer4)
             self.save(x, 7)
 
-        if self.n_layers >= 5:
+        if self.n_layers >= 5 and self.split_cond(second_half, 4):
             x = self.layer5(x)
             self.ashape(x, self.layer5)
             self.save(x, 8)
+
         return x
 
-    def forward(self, x):
-        if self.in_drop_rate:
-            if self.in_spatial_dropout:
-                if x.ndim in (3, 4):  # 1d, 2d  # TODO torch may fix bug in 1.11+
-                    l = F.dropout2d
-                elif x.ndim == 5:
-                    l = F.dropout3d
-            else:
-                l = F.dropout
-            x = l(x, p=float(self.in_drop_rate), training=self.training)
-            self.save(x, -1)
+    def forward(self, *x):
+        if len(x) == 1:
+            x = x[0]
+        if not isinstance(x, (list, tuple)):
+            if self.in_drop_rate:
+                if self.in_spatial_dropout:
+                    if x.ndim in (3, 4):
+                        # 1d, 2d  # TODO torch may fix bug in 1.11+
+                        l = F.dropout2d
+                    elif x.ndim == 5:
+                        l = F.dropout3d
+                else:
+                    l = F.dropout
+                x = l(x, p=float(self.in_drop_rate), training=self.training)
+                self.save(x, -1)
 
-        x = self.forward_features(x)
+            x = self.forward_features(x)
+        else:
+            x0, x1 = x
+            if self.split_siamese:
+                x0 = self.forward_features(x0, second_half=False)
+                x1 = self.forward_features(x1, second_half=False)
+            else:
+                x0 = self.forward_features(x0, second_half=False, first_net=True)
+                x1 = self.forward_features(x1, second_half=False, first_net=False)
+            x = self._fuse_op(x0, x1)
+            x = self.forward_features(x, second_half=True, first_net=True)
+
         x = self.global_pool(x)
         self.save(x, 9)
 
         if self.out_drop_rate:
             x = F.dropout(x, p=float(self.out_drop_rate), training=self.training)
-        self.save(x, 10)
+            self.save(x, 10)
+
+        if self.fc_post_gap is not None:
+            x = self.fc_post_gap(x)
+            self.save(x, 11)
 
         if self.fc is not None:
             x = self.fc(x)
-            self.save(x, 11)
+            self.save(x, 12)
         return x
 
 
