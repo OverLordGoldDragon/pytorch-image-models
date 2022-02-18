@@ -710,9 +710,9 @@ class ResNet(nn.Module):
             # always run
             (second_half is None)  or
             # second half
-            (second_half and self.layer_split_idx >= current_idx) or
+            (second_half and current_idx >= self.layer_split_idx) or
             # first half
-            (not second_half and self.layer_split_idx < current_idx)
+            (not second_half and current_idx < self.layer_split_idx)
         )
 
     def forward_features(self, x, second_half=None, first_net=True):
