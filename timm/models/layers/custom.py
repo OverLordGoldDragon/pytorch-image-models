@@ -466,8 +466,10 @@ class MaxPoolNd(nn.modules.pooling._MaxPoolNd):
 
 class BatchNormNd(_BatchNorm):
     def forward(self, input):
-        return _BatchNorm.forward(self, input.view(*input.shape[:2], -1)
-                                  ).view(*input.shape)
+        if input.ndim >= 6:
+            return _BatchNorm.forward(self, input.view(*input.shape[:2], -1)
+                                      ).view(*input.shape)
+        return _BatchNorm.forward(self, input)
 
     r"""Ndim BN"""
     def _check_input_dim(self, input):

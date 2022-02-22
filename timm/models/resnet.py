@@ -507,9 +507,9 @@ class ResNet(nn.Module):
 
     def __init__(self, block, layers, in_shape, num_classes=1000,
                  cardinality=1, base_width=64, stem_width=64, stem_kernel_size=7,
-                 stem_groups=1, replace_stem_pool=False,
-                 block_reduce_first=1, down_kernel_size=(1, 1, 1, 1),
-                 avg_down=False, act_layer=nn.ReLU, norm_layer=None,
+                 stem_groups=1, block_reduce_first=1,
+                 down_kernel_size=(1, 1, 1, 1), avg_down=False,
+                 act_layer=nn.ReLU, norm_layer=None,
                  aa_layer=None, in_drop_rate=0., out_drop_rate=0.,
                  drop_path_rate=0., drop_block_rate=(0, 0, 0, 0),
                  drop_block_size=(3, 3, 3, 3),
@@ -522,8 +522,8 @@ class ResNet(nn.Module):
                  stride=(1, 1, 1, 1), layer_dilation=(1, 1, 1, 1),
                  layer_use_mp=(0, 0, 0, 0), layer_residual=(1, 1, 1, 1),
                  layer_se_ratio=(16, 16, 16, 16), layer_split_idx=None,
-                 split_siamese=True, fuse_op=None, attn_layer='se',
-                 fc_post_gap=None, include_classifier=True):
+                 split_siamese=True, stem_pseudo_4d=False, fuse_op=None,
+                 attn_layer='se', fc_post_gap=None, include_classifier=True):
         block_args = block_args or dict()
         self.layers = layers
         self.num_classes = num_classes
@@ -534,11 +534,20 @@ class ResNet(nn.Module):
         self.stem_pool = (stem_pool if isinstance(stem_pool, tuple) else
                           (stem_pool,))
         self.use_stem_pool = bool(not all(p == 1 for p in self.stem_pool))
+        self.stem_pseudo_4d = stem_pseudo_4d
 
         if layer_split_idx is not None:
             assert layer_split_idx >= 0, layer_split_idx
         self.layer_split_idx = layer_split_idx
         self.split_siamese = split_siamese
+
+        # in_sahpe
+        if isinstance(in_shape[0], tuple):
+            if (layer_split_idx is None or
+                in_shape[0] != in_shape[1] or
+                len(in_shape) > 2):
+                raise ValueError("whatdo with in_shape=%s" % str(in_shape))
+            in_shape = in_shape[0]
         self.in_shape = in_shape
 
         super(ResNet, self).__init__()
@@ -556,7 +565,7 @@ class ResNet(nn.Module):
         assert not (dims != 2 and any(d != 0 for d in drop_block_rate)
                     ), (dims, drop_block_rate)
 
-        # Stem
+        # Stem ################################################################
         inplanes = stem_width
         def make_stem():
             conv1 = self._conv(in_shape, inplanes, kernel_size=stem_kernel_size,
@@ -565,28 +574,60 @@ class ResNet(nn.Module):
             bn1 = norm_layer(inplanes)
             act1 = act_layer(inplace=True)
             feature_info = [dict(num_chs=inplanes, reduction=2, module='act1')]
+            conv1_out_shape = conv1.out_shape
 
-            # Stem Pooling
-            if replace_stem_pool:
-                raise NotImplementedError
-            elif self.use_stem_pool:
-                if aa_layer is not None:
-                    raise NotImplementedError
-                else:
-                    maxpool = MaxPoolNd(conv1.out_shape, stem_pool_kernel_size,
-                                        stem_pool)
+            stem = nn.Sequential(conv1, bn1, act1)
+            return stem, feature_info, conv1_out_shape
 
-            if self.use_stem_pool:
-                layer1_in_shape = tuple(maxpool.out_shape)
-                stem = nn.Sequential(conv1, bn1, act1, maxpool)
-            else:
-                layer1_in_shape = tuple(conv1.out_shape)
-                stem = nn.Sequential(conv1, bn1, act1)
-            return stem, feature_info, layer1_in_shape
+        self.stem, self.feature_info, conv1_out_shape = make_stem()
 
-        self.stem, self.feature_info, layer1_in_shape = make_stem()
+        if self.use_stem_pool:
+            self._max_pool = MaxPoolNd(conv1_out_shape, stem_pool_kernel_size,
+                                       stem_pool)
+            layer1_in_shape = self._max_pool.out_shape
+        else:
+            layer1_in_shape = conv1_out_shape
 
-        # Feature Blocks
+        # Pseudo-4d stem ######################################################
+        if self.stem_pseudo_4d:
+            class Reshape(nn.Module):
+                def __init__(self, shape):
+                    super(Reshape, self).__init__()
+                    self.shape = shape
+
+                def forward(self, x):
+                    return x.view(self.shape)
+
+            assert len(in_shape) == 5, in_shape
+
+            def make_stem_pseudo_4d():
+                # TODO replace with one modified stem layer
+                """- global average `n1` & collapse
+                   - convolve over `(n2, n1_fr, t)`
+                   - compute SE attention map to scale original `C = 16 * n2`
+                """
+                avg_pool1 = nn.AdaptiveAvgPool3d((in_shape[2], 1, in_shape[4]))
+                # (B, C, n2, n1_fr, 1, t)
+                # -- but no 1 implicitly like `keepdim=False`
+                #    so we conv `(n2, n1_fr, t)`
+                reshape = (in_shape[0], 16, in_shape[1]//16, in_shape[2],
+                           in_shape[4])
+                reshape10 = Reshape(reshape)
+
+                conv1 = self._conv(reshape, inplanes,
+                                   kernel_size=stem_kernel_size,
+                                   stride=stem_stride, bias=False,
+                                   groups=stem_groups)
+                bn1 = norm_layer(inplanes)
+                act1 = act_layer(inplace=True)
+
+
+                stem = nn.Sequential(avg_pool1, reshape10, conv1, bn1, act1)
+                return stem
+
+            self.stem_pseudo_4d = make_stem_pseudo_4d()
+
+        # Feature Blocks ######################################################
         def do_make_blocks():
             stage_modules, stage_feature_info = make_blocks(
                 block, channels, layers, inplanes, in_shape=layer1_in_shape,
@@ -648,6 +689,8 @@ class ResNet(nn.Module):
                 name += '_dual'
                 self.add_module(name, module)
             self.add_module('stem_dual', make_stem()[0])
+            if self.stem_pseudo_4d:
+                self.add_module('stem_pseudo_4d_dual', make_stem_pseudo_4d())
 
             names_orig, modules_orig = [], []
             for n, m in self.named_modules():
@@ -717,37 +760,48 @@ class ResNet(nn.Module):
 
     def forward_features(self, x, second_half=None, first_net=True):
         if not second_half:
-            x = (self.stem(x) if first_net else
-                 self.stem_dual(x))
-            self.save(x, 3)
+            x0 = (self.stem(x) if first_net else
+                  self.stem_dual(x))
+            self.save(x0, 1)
+
+            if self.stem_pseudo_4d:
+                x1 = (self.stem_pseudo_4d(x) if first_net else
+                      self.stem_pseudo_4d_dual(x))
+                x = x0 + x1
+            else:
+                x = x0
+
+            if self.use_stem_pool:
+                x = self._max_pool(x)
+            self.save(x, 2)
 
             x = (self.layer1(x) if first_net else
                  self.layer1_dual(x))
             self.ashape(x, self.layer1)
-            self.save(x, 4)
+            self.save(x, 3)
 
         if self.n_layers >= 2 and self.split_cond(second_half, 1):
             x = (self.layer2(x) if first_net else
                  self.layer2_dual(x))
             self.ashape(x, self.layer2)
-            self.save(x, 5)
+            self.save(x, 4)
 
         if self.n_layers >= 3 and self.split_cond(second_half, 2):
             x = (self.layer3(x) if first_net else
                  self.layer3_dual(x))
             self.ashape(x, self.layer3)
-            self.save(x, 6)
+            self.save(x, 5)
 
         if self.n_layers >= 4 and self.split_cond(second_half, 3):
             x = (self.layer4(x) if first_net else
                  self.layer4_dual(x))
             self.ashape(x, self.layer4)
-            self.save(x, 7)
+            self.save(x, 6)
 
         if self.n_layers >= 5 and self.split_cond(second_half, 4):
             x = self.layer5(x)
             self.ashape(x, self.layer5)
-            self.save(x, 8)
+            self.save(x, 7)
 
         return x
 
