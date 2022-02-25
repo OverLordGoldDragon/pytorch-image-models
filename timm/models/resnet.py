@@ -775,6 +775,7 @@ class ResNet(nn.Module):
                 x = self._max_pool(x)
             self.save(x, 2)
 
+        if self.n_layers >= 1 and self.split_cond(second_half, 0):
             x = (self.layer1(x) if first_net else
                  self.layer1_dual(x))
             self.ashape(x, self.layer1)
