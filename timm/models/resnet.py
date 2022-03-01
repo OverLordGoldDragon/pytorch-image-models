@@ -671,7 +671,11 @@ class ResNet(nn.Module):
                   'diff': torch.sub,
                   None:   None}[fuse_op.split('-')[0]]
             if 'bn' in fuse_op:
-                l = getattr(self, f'layer{layer_split_idx}')[-1]
+                if layer_split_idx == 0:
+                    l = (self._max_pool if self.use_stem_pool else
+                         self.stem)
+                else:
+                    l = getattr(self, f'layer{layer_split_idx}')[-1]
                 self._fo_norm = norm_layer(l.out_shape[1])
                 self._fuse_op = lambda x0, x1: self._fo_norm(fo(x0, x1))
             else:
